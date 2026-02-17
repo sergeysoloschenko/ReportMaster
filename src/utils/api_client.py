@@ -3,6 +3,7 @@ Claude API Client for categorization and summarization
 """
 
 import logging
+import re
 from anthropic import Anthropic
 from typing import List, Dict, Optional
 
@@ -121,18 +122,25 @@ class ClaudeAPIClient:
         
         # Combine messages
         combined = "\n\n---\n\n".join(messages[:5])
+        organizations = self._extract_organizations(participants)
+        organizations_text = ", ".join(organizations) if organizations else "Организации не определены"
         
         prompt = f"""Ты — профессиональный AI-аналитик и автор ежемесячных проектных отчётов в девелопменте и гостиничном строительстве.
 
 Создай структурированный отчёт по разделу **4. Работа с консультантами и операторами** на основе переписки.
 
 **ВАЖНО:** Отчёт должен быть в деловом, нейтральном стиле, совершенный вид, 3-е лицо.
+**КРИТИЧЕСКОЕ ПРАВИЛО:** НЕ указывай ФИО, имена и должности конкретных людей.
+Во всех формулировках используй только названия организаций (по доменам email и контексту переписки).
+Пример: вместо "Юдина Т.В. инициировала..." пиши "Спектрум Холдинг инициировало...".
+Если персоналия встречается в тексте, замени её на соответствующую организацию.
 
 **Входные данные:**
 - Тема: {category}
 - Контекст: {context}
 - Период: {date_range}
-- Участники: {', '.join(participants[:5])}
+- Участники (сырые данные): {', '.join(participants[:8])}
+- Определённые организации: {organizations_text}
 
 Переписка:
 {combined[:2500]}
@@ -192,7 +200,7 @@ class ClaudeAPIClient:
                     'context': context,
                     'actions': [content[:500]],
                     'result': "Требует уточнения",
-                    'parties': ', '.join(participants[:5]),
+                    'parties': organizations_text,
                     'remarks': "",
                     'recommendations': ""
                 }
@@ -205,7 +213,7 @@ class ClaudeAPIClient:
                 'context': context,
                 'actions': ['Переписка обработана в базовом режиме без AI-суммаризации'],
                 'result': "В процессе",
-                'parties': ', '.join(participants[:5]),
+                'parties': organizations_text,
                 'remarks': "",
                 'recommendations': "Проверить корректность API-ключа и повторить генерацию для расширенного резюме"
             }
@@ -218,6 +226,39 @@ class ClaudeAPIClient:
             or "invalid x-api-key" in text
             or "error code: 401" in text
         )
+
+    def _extract_organizations(self, participants: List[str]) -> List[str]:
+        """Extract organization names from participant emails/domains."""
+        domain_aliases = {
+            "spgr.ru": "Спектрум Холдинг",
+            "dusit.com": "Dusit International",
+            "port-gdz.com": "Порт Геленджик",
+            "dyergroup.ru": "Dyer Group",
+            "groupdyer.com": "Dyer Group",
+            "gmail.com": "Внешний контрагент",
+            "yandex.ru": "Внешний контрагент",
+            "mail.ru": "Внешний контрагент",
+        }
+
+        orgs = []
+        seen = set()
+
+        for item in participants:
+            emails = re.findall(r"[A-Za-z0-9._%+-]+@([A-Za-z0-9.-]+\.[A-Za-z]{2,})", item or "")
+            for domain in emails:
+                domain = domain.lower()
+                org = domain_aliases.get(domain)
+                if not org:
+                    parts = domain.split(".")
+                    if len(parts) >= 2:
+                        org = parts[-2].upper()
+                    else:
+                        org = domain.upper()
+                if org not in seen:
+                    seen.add(org)
+                    orgs.append(org)
+
+        return orgs
 
 
 if __name__ == "__main__":
