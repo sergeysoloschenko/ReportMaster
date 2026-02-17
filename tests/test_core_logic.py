@@ -3,6 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from src.analyzers.categorizer import Categorizer
+from src.analyzers.categorizer import ThreadCategory
 from src.generators.attachment_manager import AttachmentManager
 from src.parsers.thread_builder import ThreadBuilder
 
@@ -66,3 +67,22 @@ def test_thread_builder_splits_same_subject_with_low_participant_overlap():
 
     threads = builder.build_threads(messages)
     assert len(threads) == 2
+
+
+def test_attachment_folder_name_matches_report_section_format(tmp_path: Path):
+    manager = AttachmentManager({})
+    category = ThreadCategory("CAT_001", "Согласование ТЗ")
+
+    msg = SimpleNamespace(
+        has_attachments=True,
+        attachments=[{"filename": "spec.pdf", "data": b"pdf-bytes"}],
+    )
+    thread = SimpleNamespace(messages=[msg], total_attachments=1)
+    category.add_thread(thread)
+
+    stats = manager.save_attachments([category], tmp_path)
+
+    folder = tmp_path / "Attachments" / "4.1_Согласование ТЗ"
+    assert folder.exists()
+    assert (folder / "spec.pdf").exists()
+    assert stats["total_attachments"] == 1

@@ -42,7 +42,7 @@ class AttachmentManager:
             'saved_files': []
         }
         
-        # Process each category
+        # Process each category in the same order used for report sections (4.1, 4.2, ...)
         for idx, category in enumerate(categories, 1):
             if category.total_attachments == 0:
                 continue
@@ -50,7 +50,8 @@ class AttachmentManager:
             stats['categories_with_attachments'] += 1
             
             # Create category folder
-            category_folder_name = f"{idx:03d}_{self._sanitize_filename(category.name)}"
+            section_label = f"4.{idx}"
+            category_folder_name = f"{section_label}_{self._sanitize_filename(category.name)}"
             category_folder = attachments_folder / category_folder_name
             category_folder.mkdir(exist_ok=True)
             
