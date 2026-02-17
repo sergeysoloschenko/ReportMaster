@@ -26,6 +26,7 @@ dist/
 venv/
 .venv/
 env/
+node_modules/
 
 # Logs
 logs/*.log
@@ -38,3 +39,4 @@ data/output/*
 data/temp/*
 !data/temp/.gitkeep
 src/data/output/*
+webapp/frontend/dist/

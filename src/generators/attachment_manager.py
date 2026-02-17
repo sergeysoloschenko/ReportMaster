@@ -7,7 +7,6 @@ import logging
 from pathlib import Path
 from typing import Dict, List
 from src.analyzers.categorizer import ThreadCategory
-import shutil
 
 
 class AttachmentManager:
@@ -77,7 +76,7 @@ class AttachmentManager:
     def _save_attachment(self, attachment: dict, category_folder: Path, stats: dict):
         """Save a single attachment"""
         
-        filename = attachment['filename']
+        filename = self._safe_attachment_filename(attachment.get('filename', 'unnamed'))
         data = attachment.get('data')
         
         if not data:
@@ -98,6 +97,12 @@ class AttachmentManager:
         
         # Save file
         try:
+            resolved_output = output_path.resolve()
+            resolved_category = category_folder.resolve()
+            if resolved_category not in resolved_output.parents and resolved_output != resolved_category:
+                self.logger.error(f"    Unsafe attachment path blocked: {filename}")
+                return
+
             with open(output_path, 'wb') as f:
                 f.write(data)
             
@@ -117,11 +122,23 @@ class AttachmentManager:
         for char in invalid_chars:
             name = name.replace(char, '_')
         
+        name = name.strip().strip(".")
+        if not name:
+            name = "unnamed"
+
         # Truncate if too long
         if len(name) > max_length:
             name = name[:max_length]
         
         return name.strip()
+
+    def _safe_attachment_filename(self, raw_name: str) -> str:
+        """
+        Return safe basename for attachment.
+        Prevent path traversal and unsupported separators.
+        """
+        base_name = Path(str(raw_name)).name
+        return self._sanitize_filename(base_name, max_length=120)
 
 
 if __name__ == "__main__":

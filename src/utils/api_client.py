@@ -43,7 +43,7 @@ class ClaudeAPIClient:
         if not self.client:
             return {
                 'category': subject[:50],
-                'description': 'API key not configured'
+                'description': 'Категория определена по теме переписки'
             }
         
         prompt = f"""Проанализируй эту email переписку и предоставь НА РУССКОМ ЯЗЫКЕ:
@@ -87,9 +87,12 @@ class ClaudeAPIClient:
             
         except Exception as e:
             self.logger.error(f"Error categorizing thread: {e}")
+            if self._is_auth_error(e):
+                # Stop retrying invalid credentials for every thread.
+                self.client = None
             return {
                 'category': subject[:50],
-                'description': f'Ошибка: {str(e)}'
+                'description': 'Категория определена по теме переписки'
             }
     
     def summarize_thread(self, messages: List[str], participants: List[str], date_range: str, category: str, context: str) -> Dict:
@@ -196,14 +199,25 @@ class ClaudeAPIClient:
             
         except Exception as e:
             self.logger.error(f"Error summarizing thread: {e}")
+            if self._is_auth_error(e):
+                self.client = None
             return {
                 'context': context,
-                'actions': [f"Ошибка создания резюме: {str(e)}"],
-                'result': "",
+                'actions': ['Переписка обработана в базовом режиме без AI-суммаризации'],
+                'result': "В процессе",
                 'parties': ', '.join(participants[:5]),
                 'remarks': "",
-                'recommendations': ""
+                'recommendations': "Проверить корректность API-ключа и повторить генерацию для расширенного резюме"
             }
+
+    def _is_auth_error(self, error: Exception) -> bool:
+        """Return True for authentication-related API failures."""
+        text = str(error).lower()
+        return (
+            "authentication_error" in text
+            or "invalid x-api-key" in text
+            or "error code: 401" in text
+        )
 
 
 if __name__ == "__main__":

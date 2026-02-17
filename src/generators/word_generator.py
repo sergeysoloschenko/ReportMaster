@@ -193,13 +193,12 @@ class WordReportGenerator:
         total_messages = sum(s['message_count'] for s in summaries.values())
         total_attachments = sum(s['attachment_count'] for s in summaries.values())
         
-        stats = doc.add_paragraph()
-        stats.add_run(self.TRANSLATIONS_RU['statistics']).bold = True
-        
-        stats_text = doc.add_paragraph()
-        stats_text.add_run(f"• {self.TRANSLATIONS_RU['total_categories']}: {len(summaries)}\n")
-        stats_text.add_run(f"• {self.TRANSLATIONS_RU['total_messages']}: {total_messages}\n")
-        stats_text.add_run(f"• {self.TRANSLATIONS_RU['total_attachments']}: {total_attachments}\n")
+        heading = doc.add_paragraph()
+        heading.add_run(self.TRANSLATIONS_RU['statistics']).bold = True
+
+        doc.add_paragraph(f"• {self.TRANSLATIONS_RU['total_categories']}: {len(summaries)}")
+        doc.add_paragraph(f"• {self.TRANSLATIONS_RU['total_messages']}: {total_messages}")
+        doc.add_paragraph(f"• {self.TRANSLATIONS_RU['total_attachments']}: {total_attachments}")
 
 
 if __name__ == "__main__":

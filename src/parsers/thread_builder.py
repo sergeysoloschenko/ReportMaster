@@ -75,6 +75,7 @@ class ThreadBuilder:
         # Get settings from config
         thread_config = self.config.get('email', {}).get('thread_grouping', {})
         self.similarity_threshold = thread_config.get('similarity_threshold', 0.7)
+        self.max_gap_days = thread_config.get('max_gap_days', 7)
     
     def build_threads(self, messages: List[EmailMessage]) -> List[EmailThread]:
         """
@@ -99,8 +100,11 @@ class ThreadBuilder:
         thread_counter = 1
         
         for subject_key, msgs in subject_groups.items():
-            # Further split by time gaps if needed
-            sub_threads = self._split_by_time_gap(msgs)
+            # Split by participant overlap and time gaps
+            participant_groups = self._split_by_participants(msgs)
+            sub_threads = []
+            for participant_group in participant_groups:
+                sub_threads.extend(self._split_by_time_gap(participant_group, max_gap_days=self.max_gap_days))
             
             for sub_msgs in sub_threads:
                 thread = EmailThread(f"THREAD_{thread_counter:03d}")
@@ -191,6 +195,36 @@ class ThreadBuilder:
             sub_threads.append(current_thread)
         
         return sub_threads if sub_threads else [messages]
+
+    def _split_by_participants(self, messages: List[EmailMessage]) -> List[List[EmailMessage]]:
+        """
+        Split by participant overlap to reduce false merges when subject is generic.
+        """
+        if len(messages) <= 1:
+            return [messages]
+
+        groups: List[List[EmailMessage]] = []
+        group_participants: List[Set[str]] = []
+
+        for msg in messages:
+            msg_participants = {msg.sender, *msg.recipients, *msg.cc}
+            matched = False
+            for idx, participants in enumerate(group_participants):
+                if not participants:
+                    continue
+                overlap = len(msg_participants & participants)
+                ratio = overlap / max(len(msg_participants), 1)
+                if ratio >= self.similarity_threshold:
+                    groups[idx].append(msg)
+                    group_participants[idx].update(msg_participants)
+                    matched = True
+                    break
+
+            if not matched:
+                groups.append([msg])
+                group_participants.append(set(msg_participants))
+
+        return groups
 
 
 # Import datetime for thread builder

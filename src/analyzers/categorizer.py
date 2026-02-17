@@ -4,6 +4,7 @@ Uses AI and algorithms to categorize email threads
 """
 
 import logging
+import re
 from typing import List, Dict
 from collections import Counter
 from src.parsers.thread_builder import EmailThread
@@ -67,6 +68,7 @@ class Categorizer:
             return []
         
         categories = []
+        categories_by_name = {}
         category_counter = 1
         
         for thread in threads:
@@ -91,16 +93,21 @@ class Categorizer:
                 category_name = thread.subject[:50]
                 category_desc = f"Thread with {thread.message_count} messages"
             
-            # Create category
-            category = ThreadCategory(
-                category_id=f"CAT_{category_counter:03d}",
-                name=category_name,
-                description=category_desc
-            )
-            category.add_thread(thread)
-            categories.append(category)
-            
-            category_counter += 1
+            normalized_category_name = self._normalize_category_name(category_name)
+
+            if normalized_category_name in categories_by_name:
+                category = categories_by_name[normalized_category_name]
+                category.add_thread(thread)
+            else:
+                category = ThreadCategory(
+                    category_id=f"CAT_{category_counter:03d}",
+                    name=category_name,
+                    description=category_desc
+                )
+                category.add_thread(thread)
+                categories.append(category)
+                categories_by_name[normalized_category_name] = category
+                category_counter += 1
             
             self.logger.info(f"  Thread '{thread.subject[:40]}...' -> Category: {category_name}")
         
@@ -114,10 +121,13 @@ class Categorizer:
         all_text = " ".join([msg.body for msg in thread.messages if msg.body])
         
         # Simple keyword extraction - split and count
-        words = all_text.lower().split()
+        words = re.findall(r"[a-zA-Zа-яА-Я0-9]{3,}", all_text.lower())
         
         # Filter out short words and common words
-        stop_words = {'the', 'is', 'at', 'which', 'on', 'and', 'a', 'an', 'as', 'to', 'for', 'of', 'in'}
+        stop_words = {
+            'the', 'is', 'at', 'which', 'on', 'and', 'a', 'an', 'as', 'to', 'for', 'of', 'in',
+            'что', 'это', 'как', 'для', 'или', 'при', 'без', 'после', 'письмо'
+        }
         filtered_words = [w for w in words if len(w) > 3 and w not in stop_words]
         
         # Count frequencies
@@ -142,6 +152,11 @@ class Categorizer:
             content = content[:max_length] + "..."
         
         return content
+
+    def _normalize_category_name(self, category_name: str) -> str:
+        """Normalize category name for deduplication."""
+        normalized = " ".join((category_name or "Без категории").lower().split())
+        return normalized[:120]
 
 
 if __name__ == "__main__":

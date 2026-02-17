@@ -1,0 +1,15 @@
+INFO:     Started server process [54584]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     127.0.0.1:52020 - "POST /api/jobs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52023 - "GET /api/jobs/b8d59060e32f47b6b30c549c63d433d6 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52028 - "GET /api/jobs/b8d59060e32f47b6b30c549c63d433d6 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52031 - "GET /api/jobs/b8d59060e32f47b6b30c549c63d433d6 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52034 - "GET /api/jobs/b8d59060e32f47b6b30c549c63d433d6 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52037 - "GET /api/jobs/b8d59060e32f47b6b30c549c63d433d6 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52040 - "GET /api/jobs/b8d59060e32f47b6b30c549c63d433d6 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52043 - "GET /api/jobs/b8d59060e32f47b6b30c549c63d433d6 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52046 - "GET /api/jobs/b8d59060e32f47b6b30c549c63d433d6 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52050 - "GET /api/jobs/b8d59060e32f47b6b30c549c63d433d6 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52056 - "GET /api/jobs/b8d59060e32f47b6b30c549c63d433d6/report HTTP/1.1" 200 OK
