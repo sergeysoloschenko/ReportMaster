@@ -9,6 +9,7 @@ from datetime import datetime
 from docx import Document
 from docx.shared import Pt, RGBColor, Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.table import WD_TABLE_ALIGNMENT, WD_ALIGN_VERTICAL
 from typing import Dict, List
 
 
@@ -64,8 +65,8 @@ class WordReportGenerator:
         # Add header
         self._add_header(doc, report_month)
         
-        # Add section 4 with subsections
-        self._add_section_4(doc, summaries)
+        # Add section 4 with subsections in investor-style table
+        self._add_section_4_table(doc, summaries)
         
         # Add statistics
         self._add_statistics(doc, summaries)
@@ -113,77 +114,69 @@ class WordReportGenerator:
         # Add spacing
         doc.add_paragraph()
     
-    def _add_section_4(self, doc, summaries: Dict):
-        """Add Section 4: Work with consultants and operators"""
-        
-        # Section title
-        section_title = doc.add_heading(self.TRANSLATIONS_RU['section_title'], level=1)
-        section_title.alignment = WD_ALIGN_PARAGRAPH.LEFT
-        
-        doc.add_paragraph()
-        
-        # Add subsections for each category
-        for idx, (cat_id, summary_data) in enumerate(summaries.items(), 1):
-            self._add_subsection(doc, idx, summary_data)
-    
-    def _add_subsection(self, doc, subsection_num: int, summary_data: Dict):
-        """Add a subsection (4.x) following the template structure"""
-        
-        # Subsection heading: 4.x [Category Name]
-        heading_text = f"4.{subsection_num} {summary_data['category_name']}"
-        heading = doc.add_heading(heading_text, level=2)
-        heading.alignment = WD_ALIGN_PARAGRAPH.LEFT
-        
-        # Context
-        context_para = doc.add_paragraph()
-        context_para.add_run(self.TRANSLATIONS_RU['context']).bold = True
-        context_para.add_run(f" {summary_data['context']}")
-        
-        # Actions
-        actions_para = doc.add_paragraph()
-        actions_para.add_run(self.TRANSLATIONS_RU['actions']).bold = True
-        
-        actions_list = summary_data.get('actions', [])
-        if actions_list:
-            for action in actions_list:
-                action_item = doc.add_paragraph(action, style='List Number')
-                action_item.paragraph_format.left_indent = Inches(0.5)
-        else:
-            doc.add_paragraph("Переписка по данному вопросу", style='List Number').paragraph_format.left_indent = Inches(0.5)
-        
-        # Result / Status
-        result_para = doc.add_paragraph()
-        result_para.add_run(self.TRANSLATIONS_RU['result']).bold = True
-        result_text = summary_data.get('result', 'В процессе')
-        result_para.add_run(f" {result_text}")
-        
-        # Period / Dates
-        period_para = doc.add_paragraph()
-        period_para.add_run(self.TRANSLATIONS_RU['period']).bold = True
-        period_para.add_run(f" {summary_data['date_range']}")
-        
-        # Parties / Contractors
-        parties_para = doc.add_paragraph()
-        parties_para.add_run(self.TRANSLATIONS_RU['parties']).bold = True
-        parties_text = summary_data.get('parties', ', '.join(summary_data['participants'][:5]))
-        parties_para.add_run(f" {parties_text}")
-        
-        # Remarks / Risks (only if present)
-        remarks = summary_data.get('remarks', '').strip()
-        if remarks:
-            remarks_para = doc.add_paragraph()
-            remarks_para.add_run(self.TRANSLATIONS_RU['remarks']).bold = True
-            remarks_para.add_run(f" {remarks}")
-        
-        # Recommendations / Next Steps (only if present)
-        recommendations = summary_data.get('recommendations', '').strip()
-        if recommendations:
-            rec_para = doc.add_paragraph()
-            rec_para.add_run(self.TRANSLATIONS_RU['recommendations']).bold = True
-            rec_para.add_run(f" {recommendations}")
-        
-        # Add spacing between subsections
-        doc.add_paragraph()
+    def _add_section_4_table(self, doc, summaries: Dict):
+        """
+        Add section in investor-style table:
+        col1 = № (4 / 4.1 / 4.2 ...)
+        col2 = content and result
+        col3 = period/date
+        """
+        table = doc.add_table(rows=1, cols=3)
+        table.style = "Table Grid"
+        table.alignment = WD_TABLE_ALIGNMENT.CENTER
+
+        table.columns[0].width = Inches(0.6)
+        table.columns[1].width = Inches(7.0)
+        table.columns[2].width = Inches(1.8)
+
+        # Row "4"
+        header_cells = table.rows[0].cells
+        header_cells[0].text = "4"
+        header_cells[1].text = "Работа с консультантами и операторами в рамках реализации проекта."
+        header_cells[2].text = ""
+        self._format_row(header_cells, is_header=True)
+
+        # Rows "4.1", "4.2", ...
+        for idx, (_, summary_data) in enumerate(summaries.items(), 1):
+            row_cells = table.add_row().cells
+            row_cells[0].text = f"4.{idx}"
+            row_cells[1].text = self._build_investor_cell_text(summary_data)
+            row_cells[2].text = summary_data.get("date_range", "")
+            self._format_row(row_cells, is_header=False)
+
+    def _build_investor_cell_text(self, summary_data: Dict) -> str:
+        """Build concise narrative like in investor sample."""
+        actions = summary_data.get("actions", []) or []
+        actions_text = " ".join(a.strip() for a in actions if a and a.strip())
+        if not actions_text:
+            actions_text = "Проведена рабочая переписка по профильному вопросу."
+
+        result = (summary_data.get("result") or "").strip()
+        if not result:
+            result = "Статус уточняется."
+
+        # Keep text concise for table layout.
+        actions_text = actions_text[:900].rstrip()
+        result = result[:300].rstrip()
+
+        return f"{actions_text}\n\nРезультат работ: {result}"
+
+    def _format_row(self, cells, is_header: bool):
+        """Apply alignment/font to row cells."""
+        for idx, cell in enumerate(cells):
+            cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
+            for paragraph in cell.paragraphs:
+                if idx == 0:
+                    paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                elif idx == 2:
+                    paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                else:
+                    paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT
+                for run in paragraph.runs:
+                    run.font.name = self.font
+                    run.font.size = Pt(self.font_size)
+                    if is_header:
+                        run.bold = True
     
     def _add_statistics(self, doc, summaries: Dict):
         """Add report statistics"""
