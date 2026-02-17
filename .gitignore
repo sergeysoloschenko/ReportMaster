@@ -1,0 +1,40 @@
+# OS artifacts
+.DS_Store
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+
+# Python cache/build artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Logs
+logs/*.log
+
+# Runtime/project data
+data/input/*
+!data/input/.gitkeep
+data/output/*
+!data/output/.gitkeep
+data/temp/*
+!data/temp/.gitkeep
+src/data/output/*
