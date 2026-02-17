@@ -1,0 +1,64 @@
+# Application Settings
+app:
+  name: "ReportMaster"
+  version: "1.0.0"
+  debug: true
+
+# Email Processing
+email:
+  thread_grouping:
+    method: "advanced"  # simple, advanced
+    similarity_threshold: 0.7
+  
+  content_cleaning:
+    remove_signatures: true
+    remove_disclaimers: true
+    remove_quoted_text: true
+  
+  relevance_filters:
+    exclude_auto_replies: true
+    exclude_ooo: true
+    exclude_notifications: true
+    min_word_count: 10
+
+# Categorization
+categorization:
+  clustering:
+    algorithm: "dbscan"  # dbscan, kmeans, hierarchical
+    max_categories: 15
+    min_emails_per_category: 2
+  
+  ai_labeling:
+    enabled: true
+    fallback_to_keywords: true
+
+# Summarization
+summarization:
+  max_length: 300  # characters
+  include_participants: true
+  include_dates: true
+  style: "professional"  # professional, concise, detailed
+
+# Report Generation
+report:
+  format: "docx"
+  template: "default"
+  include_statistics: true
+  include_timeline: false
+  
+  table_style:
+    font: "Calibri"
+    font_size: 11
+    header_color: "#4472C4"
+  
+  attachments:
+    organize_by_category: true
+    include_all: false  # false = AI-filtered
+
+# Logging
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  console: true
+  file: true
+  max_file_size: "10MB"
+  backup_count: 5
