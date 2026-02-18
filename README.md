@@ -76,7 +76,16 @@ Backend API: `http://localhost:8000`
 cp .env.example .env
 ```
 
-2. Set real `ANTHROPIC_API_KEY` in `.env`
+2. Set GigaChat credentials in `.env`:
+
+```bash
+GIGACHAT_AUTH_KEY=<base64(client_id:client_secret)>
+GIGACHAT_SCOPE=GIGACHAT_API_PERS
+GIGACHAT_MODEL_CATEGORIZATION=GigaChat-2
+GIGACHAT_MODEL_SUMMARIZATION=GigaChat-2-Max
+```
+
+Access token is requested automatically via OAuth (`/api/v2/oauth`) and refreshed by the backend.
 3. Run:
 
 ```bash

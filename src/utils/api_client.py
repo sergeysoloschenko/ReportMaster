@@ -1,52 +1,56 @@
 """
-Claude API Client for categorization and summarization
+GigaChat API Client for categorization and summarization.
 """
 
+import json
 import logging
 import re
-from anthropic import Anthropic
-from typing import List, Dict, Optional
+import time
+from typing import Dict, List, Optional
+from uuid import uuid4
+
+import httpx
 
 
-class ClaudeAPIClient:
-    """Client for interacting with Claude API"""
-    
+class GigaChatAPIClient:
+    """
+    Backward-compatible client name used by existing pipeline code.
+    Internally this implementation uses GigaChat REST API.
+    """
+
+    OAUTH_URL = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
+    API_URL = "https://gigachat.devices.sberbank.ru/api/v1/chat/completions"
+
     def __init__(self, config: dict):
         self.logger = logging.getLogger(__name__)
         self.config = config
-        
-        api_key = config['api']['anthropic_api_key']
-        
-        if not api_key or api_key == 'not_set':
-            self.logger.warning("Claude API key not set!")
+
+        api_cfg = config.get("api", {})
+        self.auth_key = api_cfg.get("gigachat_auth_key", "not_set")
+        self.scope = api_cfg.get("gigachat_scope", "GIGACHAT_API_PERS")
+        self.model_categorization = api_cfg.get("model_categorization", "GigaChat-2")
+        self.model_summarization = api_cfg.get("model_summarization", "GigaChat-2-Max")
+        self.max_tokens = api_cfg.get("max_tokens", 2048)
+        self.temperature = api_cfg.get("temperature", 0.3)
+
+        self._access_token: Optional[str] = None
+        self._token_expires_at: int = 0
+        self.http = httpx.Client(timeout=45.0)
+
+        if not self.auth_key or self.auth_key == "not_set":
+            self.logger.warning("GigaChat authorization key not set!")
             self.client = None
         else:
-            self.client = Anthropic(api_key=api_key)
-            self.logger.info("Claude API client initialized")
-        
-        self.model_categorization = config['api']['model_categorization']
-        self.model_summarization = config['api']['model_summarization']
-        self.max_tokens = config['api']['max_tokens']
-        self.temperature = config['api']['temperature']
-    
+            self.client = self
+            self.logger.info("GigaChat API client initialized")
+
     def categorize_thread(self, subject: str, keywords: List[str], sample_content: str) -> Dict:
-        """
-        Generate category name and description for a thread IN RUSSIAN
-        
-        Args:
-            subject: Email subject
-            keywords: Extracted keywords
-            sample_content: Sample email content
-        
-        Returns:
-            Dict with 'category' and 'description'
-        """
         if not self.client:
             return {
-                'category': subject[:50],
-                'description': 'Категория определена по теме переписки'
+                "category": subject[:50],
+                "description": "Категория определена по теме переписки",
             }
-        
+
         prompt = f"""Проанализируй эту email переписку и предоставь НА РУССКОМ ЯЗЫКЕ:
 1. Краткое название категории (2-4 слова) в формате работы с консультантом или оператором
 2. Краткое описание контекста (1 предложение)
@@ -60,71 +64,52 @@ class ClaudeAPIClient:
 Ответь в точном формате:
 Категория: [название категории]
 Описание: [описание контекста]"""
-        
+
         try:
-            response = self.client.messages.create(
+            content = self._chat_completion(
+                prompt=prompt,
                 model=self.model_categorization,
                 max_tokens=200,
-                temperature=self.temperature,
-                messages=[{"role": "user", "content": prompt}]
             )
-            
-            content = response.content[0].text
-            
-            # Parse response
+
             category = "Без категории"
             description = ""
-            
-            for line in content.split('\n'):
-                if line.startswith('Категория:') or line.startswith('Category:'):
-                    category = line.split(':', 1)[1].strip()
-                elif line.startswith('Описание:') or line.startswith('Description:'):
-                    description = line.split(':', 1)[1].strip()
-            
+
+            for line in content.split("\n"):
+                if line.startswith("Категория:") or line.startswith("Category:"):
+                    category = line.split(":", 1)[1].strip()
+                elif line.startswith("Описание:") or line.startswith("Description:"):
+                    description = line.split(":", 1)[1].strip()
+
             return {
-                'category': category,
-                'description': description
+                "category": category,
+                "description": description,
             }
-            
+
         except Exception as e:
             self.logger.error(f"Error categorizing thread: {e}")
             if self._is_auth_error(e):
-                # Stop retrying invalid credentials for every thread.
                 self.client = None
             return {
-                'category': subject[:50],
-                'description': 'Категория определена по теме переписки'
+                "category": subject[:50],
+                "description": "Категория определена по теме переписки",
             }
-    
+
     def summarize_thread(self, messages: List[str], participants: List[str], date_range: str, category: str, context: str) -> Dict:
-        """
-        Generate structured summary for a thread following the formal report template
-        
-        Args:
-            messages: List of message contents
-            participants: List of participant names
-            date_range: Date range string
-            category: Category name
-            context: Context description
-        
-        Returns:
-            Dict with structured summary sections
-        """
         if not self.client:
             return {
-                'context': "API ключ не настроен",
-                'actions': [],
-                'result': "",
-                'parties': "",
-                'remarks': "",
-                'recommendations': ""
+                "context": "GigaChat ключ не настроен",
+                "actions": [],
+                "result": "",
+                "parties": "",
+                "remarks": "",
+                "recommendations": "",
             }
-        
-        # Combine messages
+
         combined = "\n\n---\n\n".join(messages[:5])
         organizations = self._extract_organizations(participants)
         organizations_text = ", ".join(organizations) if organizations else "Организации не определены"
-        
+
         prompt = f"""Ты — профессиональный AI-аналитик и автор ежемесячных проектных отчётов в девелопменте и гостиничном строительстве.
 
 Создай структурированный отчёт по разделу **4. Работа с консультантами и операторами** на основе переписки.
@@ -173,62 +158,111 @@ class ClaudeAPIClient:
   "remarks": "...",
   "recommendations": "..."
 }}"""
-        
+
         try:
-            response = self.client.messages.create(
+            content = self._chat_completion(
+                prompt=prompt,
                 model=self.model_summarization,
                 max_tokens=self.max_tokens,
-                temperature=self.temperature,
-                messages=[{"role": "user", "content": prompt}]
             )
-            
-            content = response.content[0].text.strip()
-            
-            # Try to parse JSON
-            import json
-            import re
-            
-            # Extract JSON from response (in case there's extra text)
-            json_match = re.search(r'\{.*\}', content, re.DOTALL)
+
+            json_match = re.search(r"\{.*\}", content, re.DOTALL)
             if json_match:
-                json_str = json_match.group(0)
-                result = json.loads(json_str)
-                return result
-            else:
-                # Fallback if JSON parsing fails
-                return {
-                    'context': context,
-                    'actions': [content[:500]],
-                    'result': "Требует уточнения",
-                    'parties': organizations_text,
-                    'remarks': "",
-                    'recommendations': ""
-                }
-            
+                return json.loads(json_match.group(0))
+
+            return {
+                "context": context,
+                "actions": [content[:500]],
+                "result": "Требует уточнения",
+                "parties": organizations_text,
+                "remarks": "",
+                "recommendations": "",
+            }
+
         except Exception as e:
             self.logger.error(f"Error summarizing thread: {e}")
             if self._is_auth_error(e):
                 self.client = None
             return {
-                'context': context,
-                'actions': ['Переписка обработана в базовом режиме без AI-суммаризации'],
-                'result': "В процессе",
-                'parties': organizations_text,
-                'remarks': "",
-                'recommendations': "Проверить корректность API-ключа и повторить генерацию для расширенного резюме"
+                "context": context,
+                "actions": ["Переписка обработана в базовом режиме без AI-суммаризации"],
+                "result": "В процессе",
+                "parties": organizations_text,
+                "remarks": "",
+                "recommendations": "Проверить корректность GigaChat ключа и повторить генерацию",
             }
 
+    def _get_access_token(self) -> str:
+        now = int(time.time())
+        if self._access_token and now < self._token_expires_at - 60:
+            return self._access_token
+
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/x-www-form-urlencoded",
+            "RqUID": str(uuid4()),
+            "Authorization": f"Basic {self.auth_key}",
+        }
+        data = {"scope": self.scope}
+
+        response = self.http.post(self.OAUTH_URL, headers=headers, data=data)
+        response.raise_for_status()
+
+        payload = response.json()
+        token = payload.get("access_token")
+        expires_at = int(payload.get("expires_at", 0))
+        if not token:
+            raise RuntimeError("GigaChat OAuth token was not returned")
+
+        # If expires_at wasn't provided, fall back to ~30 min.
+        if expires_at <= now:
+            expires_at = now + 29 * 60
+
+        self._access_token = token
+        self._token_expires_at = expires_at
+        return token
+
+    def _chat_completion(self, prompt: str, model: str, max_tokens: int) -> str:
+        token = self._get_access_token()
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {token}",
+        }
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": self.temperature,
+            "max_tokens": max_tokens,
+            "stream": False,
+        }
+
+        response = self.http.post(self.API_URL, headers=headers, json=payload)
+        response.raise_for_status()
+        body = response.json()
+
+        choices = body.get("choices", [])
+        if not choices:
+            raise RuntimeError("GigaChat response has no choices")
+
+        message = choices[0].get("message", {})
+        content = message.get("content", "")
+        if not content:
+            raise RuntimeError("GigaChat response message content is empty")
+        return content
+
     def _is_auth_error(self, error: Exception) -> bool:
-        """Return True for authentication-related API failures."""
         text = str(error).lower()
         return (
-            "authentication_error" in text
-            or "invalid x-api-key" in text
-            or "error code: 401" in text
+            "401" in text
+            or "403" in text
+            or "invalid_token" in text
+            or "unauthorized" in text
+            or "forbidden" in text
+            or "basic" in text and "auth" in text
         )
 
     def _extract_organizations(self, participants: List[str]) -> List[str]:
-        """Extract organization names from participant emails/domains."""
         domain_aliases = {
             "spgr.ru": "Спектрум Холдинг",
             "dusit.com": "Dusit International",
@@ -250,10 +284,7 @@ class ClaudeAPIClient:
                 org = domain_aliases.get(domain)
                 if not org:
                     parts = domain.split(".")
-                    if len(parts) >= 2:
-                        org = parts[-2].upper()
-                    else:
-                        org = domain.upper()
+                    org = parts[-2].upper() if len(parts) >= 2 else domain.upper()
                 if org not in seen:
                     seen.add(org)
                     orgs.append(org)
@@ -261,15 +292,12 @@ class ClaudeAPIClient:
         return orgs
 
 
+ClaudeAPIClient = GigaChatAPIClient
+
+
 if __name__ == "__main__":
     from src.utils.config_loader import load_config
-    
-    config = load_config()
-    client = ClaudeAPIClient(config)
-    
-    if client.client:
-        print("✓ API client initialized successfully")
-        print(f"  Categorization model: {client.model_categorization}")
-        print(f"  Summarization model: {client.model_summarization}")
-    else:
-        print("✗ API client not initialized - check your API key in .env")
+
+    cfg = load_config()
+    client = GigaChatAPIClient(cfg)
+    print("Client ready:", bool(client.client))

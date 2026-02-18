@@ -27,14 +27,16 @@ def load_config():
         config = yaml.safe_load(f)
     
     # Override with environment variables while preserving YAML keys
-    raw_api_key = os.getenv('ANTHROPIC_API_KEY', 'not_set')
-    sanitized_api_key = raw_api_key.strip().strip('"').strip("'")
+    raw_gigachat_key = os.getenv('GIGACHAT_AUTH_KEY', '')
+    sanitized_gigachat_key = raw_gigachat_key.strip().strip('"').strip("'")
 
     config.setdefault('api', {})
     config['api'].update({
-        'anthropic_api_key': sanitized_api_key or 'not_set',
-        'model_categorization': os.getenv('CLAUDE_MODEL_CATEGORIZATION', 'claude-3-haiku-20240307'),
-        'model_summarization': os.getenv('CLAUDE_MODEL_SUMMARIZATION', 'claude-3-5-sonnet-20241022'),
+        'provider': os.getenv('LLM_PROVIDER', 'gigachat'),
+        'gigachat_auth_key': sanitized_gigachat_key or 'not_set',
+        'gigachat_scope': os.getenv('GIGACHAT_SCOPE', 'GIGACHAT_API_PERS'),
+        'model_categorization': os.getenv('GIGACHAT_MODEL_CATEGORIZATION', 'GigaChat-2'),
+        'model_summarization': os.getenv('GIGACHAT_MODEL_SUMMARIZATION', 'GigaChat-2-Max'),
         'max_tokens': int(os.getenv('MAX_TOKENS', 2048)),
         'temperature': float(os.getenv('TEMPERATURE', 0.3))
     })
