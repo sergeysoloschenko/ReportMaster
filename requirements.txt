@@ -10,6 +10,7 @@ yake==0.4.8
 
 # AI/LLM Integration
 anthropic==0.18.1
+httpx==0.27.2
 
 # Document Generation
 python-docx==1.1.0
