@@ -35,6 +35,7 @@ def load_config():
         'provider': os.getenv('LLM_PROVIDER', 'gigachat'),
         'gigachat_auth_key': sanitized_gigachat_key or 'not_set',
         'gigachat_scope': os.getenv('GIGACHAT_SCOPE', 'GIGACHAT_API_PERS'),
+        'gigachat_verify_ssl': os.getenv('GIGACHAT_VERIFY_SSL', 'true').lower() in {'1', 'true', 'yes', 'on'},
         'model_categorization': os.getenv('GIGACHAT_MODEL_CATEGORIZATION', 'GigaChat-2'),
         'model_summarization': os.getenv('GIGACHAT_MODEL_SUMMARIZATION', 'GigaChat-2-Max'),
         'max_tokens': int(os.getenv('MAX_TOKENS', 2048)),

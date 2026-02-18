@@ -28,6 +28,7 @@ class GigaChatAPIClient:
         api_cfg = config.get("api", {})
         self.auth_key = api_cfg.get("gigachat_auth_key", "not_set")
         self.scope = api_cfg.get("gigachat_scope", "GIGACHAT_API_PERS")
+        self.verify_ssl = api_cfg.get("gigachat_verify_ssl", True)
         self.model_categorization = api_cfg.get("model_categorization", "GigaChat-2")
         self.model_summarization = api_cfg.get("model_summarization", "GigaChat-2-Max")
         self.max_tokens = api_cfg.get("max_tokens", 2048)
@@ -35,7 +36,7 @@ class GigaChatAPIClient:
 
         self._access_token: Optional[str] = None
         self._token_expires_at: int = 0
-        self.http = httpx.Client(timeout=45.0)
+        self.http = httpx.Client(timeout=45.0, verify=self.verify_ssl)
 
         if not self.auth_key or self.auth_key == "not_set":
             self.logger.warning("GigaChat authorization key not set!")
