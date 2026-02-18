@@ -18,7 +18,7 @@ def load_config():
     
     # Load environment variables
     env_path = Path(__file__).parent.parent.parent / ".env"
-    load_dotenv(env_path, override=True)
+    load_dotenv(env_path, override=False)
     
     # Load YAML config
     config_path = Path(__file__).parent.parent.parent / "config" / "settings.yaml"
