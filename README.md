@@ -2,6 +2,26 @@
 
 ReportMaster processes Outlook `.msg` emails, groups threads, generates AI-based category summaries, and builds a Word monthly report with attachments.
 
+## Project Summary
+
+ReportMaster is an internal reporting system that:
+- accepts Outlook email exports (`.msg`)
+- groups messages into discussion threads
+- classifies/summarizes content with LLM APIs
+- generates structured monthly reports for business use
+
+## GitHub Workflow (Required)
+
+- Canonical repository: `https://github.com/sergeysoloschenko/ReportMaster`
+- All next changes must be committed in this git repo and pushed to GitHub (`main` or feature branch + PR).
+- Do not deploy from ad-hoc local/server changes that are not in GitHub.
+- Do not commit local virtual environments (`venv`, `.venv`) or other machine-specific artifacts.
+
+## Deploy Policy
+
+- Deploy only from GitHub repository state.
+- On server, update code from GitHub first (`git pull`) and then run deployment commands (`docker compose up -d --build`).
+
 ## Architecture
 
 - Backend: `FastAPI` (`src/webapp/backend/app.py`)

@@ -26,6 +26,8 @@ dist/
 venv/
 .venv/
 env/
+**/venv/
+**/.venv/
 node_modules/
 
 # Logs
