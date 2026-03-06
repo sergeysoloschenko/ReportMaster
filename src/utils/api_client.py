@@ -36,6 +36,11 @@ class GigaChatAPIClient:
 
         self._access_token: Optional[str] = None
         self._token_expires_at: int = 0
+        self._usage = {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+        }
         self.http = httpx.Client(timeout=45.0, verify=self.verify_ssl)
 
         if not self.auth_key or self.auth_key == "not_set":
@@ -241,6 +246,7 @@ class GigaChatAPIClient:
         response = self.http.post(self.API_URL, headers=headers, json=payload)
         response.raise_for_status()
         body = response.json()
+        self._accumulate_usage(body.get("usage") or {})
 
         choices = body.get("choices", [])
         if not choices:
@@ -251,6 +257,25 @@ class GigaChatAPIClient:
         if not content:
             raise RuntimeError("GigaChat response message content is empty")
         return content
+
+    def get_usage_stats(self) -> Dict[str, int]:
+        return dict(self._usage)
+
+    def _accumulate_usage(self, usage: Dict) -> None:
+        try:
+            prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
+            completion_tokens = int(usage.get("completion_tokens", 0) or 0)
+            total_tokens = int(usage.get("total_tokens", 0) or 0)
+        except (TypeError, ValueError):
+            self.logger.warning("Could not parse token usage payload: %s", usage)
+            return
+
+        self._usage["prompt_tokens"] += max(prompt_tokens, 0)
+        self._usage["completion_tokens"] += max(completion_tokens, 0)
+        if total_tokens > 0:
+            self._usage["total_tokens"] += total_tokens
+        else:
+            self._usage["total_tokens"] += max(prompt_tokens, 0) + max(completion_tokens, 0)
 
     def _is_auth_error(self, error: Exception) -> bool:
         text = str(error).lower()

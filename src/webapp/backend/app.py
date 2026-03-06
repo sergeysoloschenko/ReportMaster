@@ -10,7 +10,7 @@ from src.webapp.backend.job_manager import JobManager
 
 
 logger = logging.getLogger(__name__)
-app = FastAPI(title="ReportMaster API", version="1.0.0")
+app = FastAPI(title="ReportMaster API", version="1.0.1")
 job_manager = JobManager()
 
 app.add_middleware(

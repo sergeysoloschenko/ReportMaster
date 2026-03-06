@@ -151,6 +151,14 @@ class JobManager:
                 "total_attachments": att_stats["total_attachments"],
                 "report_size_kb": round(report_path.stat().st_size / 1024, 1),
             }
+            usage_stats = api_client.get_usage_stats()
+            stats.update(
+                {
+                    "input_tokens": usage_stats.get("prompt_tokens", 0),
+                    "output_tokens": usage_stats.get("completion_tokens", 0),
+                    "total_tokens": usage_stats.get("total_tokens", 0),
+                }
+            )
 
             with self.lock:
                 job = self.jobs[job_id]

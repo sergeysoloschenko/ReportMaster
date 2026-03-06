@@ -33,6 +33,24 @@ function App() {
     return `${job.step} (${job.progress}%)`;
   }, [job]);
 
+  function mergeFiles(nextFiles) {
+    setFiles((prev) => {
+      const byKey = new Map(prev.map((f) => [`${f.name}:${f.size}:${f.lastModified}`, f]));
+      nextFiles.forEach((file) => {
+        byKey.set(`${file.name}:${file.size}:${file.lastModified}`, file);
+      });
+      return Array.from(byKey.values());
+    });
+  }
+
+  function onFilesSelected(event) {
+    const nextFiles = Array.from(event.target.files || []);
+    if (nextFiles.length) {
+      mergeFiles(nextFiles);
+    }
+    event.target.value = "";
+  }
+
   async function onSubmit(event) {
     event.preventDefault();
     setError("");
@@ -76,7 +94,7 @@ function App() {
               type="file"
               accept=".msg"
               multiple
-              onChange={(e) => setFiles(Array.from(e.target.files || []))}
+              onChange={onFilesSelected}
             />
           </label>
           <label className="field">
@@ -89,6 +107,7 @@ function App() {
             />
           </label>
           <p className="meta">{files.length} file(s) selected</p>
+          {!!files.length && <p className="meta">You can open picker again to add files from another folder.</p>}
           <button className="btn" disabled={submitting}>
             {submitting ? "Starting..." : "Start Processing"}
           </button>
@@ -109,6 +128,9 @@ function App() {
               <p>Categories: {job.stats.total_categories}</p>
               <p>Attachments: {job.stats.total_attachments}</p>
               <p>Report size: {job.stats.report_size_kb} KB</p>
+              <p>Input tokens: {job.stats.input_tokens ?? 0}</p>
+              <p>Output tokens: {job.stats.output_tokens ?? 0}</p>
+              <p>Total tokens: {job.stats.total_tokens ?? 0}</p>
             </div>
           )}
           {job?.status === "completed" && (
