@@ -143,9 +143,17 @@ class ThreadBuilder:
         subject = subject.lower()
         
         # Remove common prefixes
-        prefixes = [r'^re:', r'^fw:', r'^fwd:', r'^aw:', r'^\[.*?\]']
-        for prefix in prefixes:
-            subject = re.sub(prefix, '', subject, flags=re.IGNORECASE)
+        prefixes = [
+            r'^(re|fw|fwd|aw)\s*:',
+            r'^(ответ|отв|пересл|переслано|перенаправлено)\s*:',
+            r'^\[.*?\]',
+        ]
+        changed = True
+        while changed:
+            before = subject
+            for prefix in prefixes:
+                subject = re.sub(prefix, '', subject, flags=re.IGNORECASE).strip()
+            changed = before != subject
         
         # Remove extra whitespace
         subject = ' '.join(subject.split())

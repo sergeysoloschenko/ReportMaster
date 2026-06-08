@@ -10,15 +10,20 @@ import logging
 from typing import Dict, List, Optional
 import hashlib
 import struct
+import re
+
+from src.processors.deduplicator import hash_text
+from src.processors.document_extractor import DocumentExtractor
 
 
 class EmailMessage:
     """Represents a parsed email message"""
     
-    def __init__(self, msg_file: Path):
+    def __init__(self, msg_file: Path, document_extractor: Optional[DocumentExtractor] = None):
         self.logger = logging.getLogger(__name__)
         self.file_path = msg_file
         self.msg_id = self._generate_msg_id(msg_file)
+        self.document_extractor = document_extractor or DocumentExtractor()
         
         # Metadata
         self.subject = ""
@@ -33,10 +38,13 @@ class EmailMessage:
         # Content
         self.body = ""
         self.html_body = ""
+        self.analysis_body = ""
+        self.normalized_body_hash = ""
         
         # Attachments
         self.attachments = []
         self.has_attachments = False
+        self.extracted_attachment_count = 0
         
         # Parse the message
         self._parse()
@@ -73,6 +81,9 @@ class EmailMessage:
             # Extract attachments
             self.attachments = self._extract_attachments(msg)
             self.has_attachments = len(self.attachments) > 0
+            self.extracted_attachment_count = sum(1 for att in self.attachments if att.get("extracted_text"))
+            self.normalized_body_hash = hash_text(self.body or self.html_body or "")
+            self.analysis_body = self._build_analysis_body()
             
             msg.close()
             
@@ -170,16 +181,66 @@ class EmailMessage:
         
         try:
             for attachment in msg.attachments:
+                filename = attachment.longFilename or attachment.shortFilename or 'unnamed'
+                data = attachment.data if hasattr(attachment, 'data') else None
+                extracted = self.document_extractor.extract_bytes(filename, data)
                 att_info = {
-                    'filename': attachment.longFilename or attachment.shortFilename or 'unnamed',
-                    'size': len(attachment.data) if hasattr(attachment, 'data') else 0,
-                    'data': attachment.data if hasattr(attachment, 'data') else None
+                    'filename': filename,
+                    'size': len(data) if data else 0,
+                    'data': data,
+                    'content_hash': extracted.content_hash,
+                    'extracted_text': extracted.text,
+                    'extraction_status': extracted.skipped_reason or 'ok'
                 }
                 attachments.append(att_info)
         except Exception as e:
             self.logger.warning(f"Error extracting attachments: {e}")
         
         return attachments
+
+    def _build_analysis_body(self) -> str:
+        """Build token-conscious text used by downstream categorization/summarization."""
+        body = self.get_clean_body()
+        attachment_texts = []
+        seen_hashes = set()
+
+        for attachment in self.attachments:
+            text = attachment.get("extracted_text") or ""
+            content_hash = attachment.get("content_hash")
+            if not text or content_hash in seen_hashes:
+                continue
+            seen_hashes.add(content_hash)
+            attachment_texts.append(
+                f"[Вложение: {attachment.get('filename', 'unnamed')}]\n{text[:4000]}"
+            )
+
+        if not attachment_texts:
+            return body
+
+        if self._should_include_attachment_text(body):
+            return "\n\n".join([body, *attachment_texts]).strip()
+
+        attachment_index = "; ".join(
+            attachment.get("filename", "unnamed") for attachment in self.attachments
+        )
+        return "\n\n".join([body, f"[Вложения без полного текста в LLM-контексте: {attachment_index}]"]).strip()
+
+    def _should_include_attachment_text(self, body: str) -> bool:
+        if len((body or "").strip()) < 700:
+            return True
+
+        attachment_markers = [
+            r"во влож",
+            r"вложени",
+            r"прилага",
+            r"см\.\s*файл",
+            r"см\.\s*влож",
+            r"attached",
+            r"attachment",
+            r"see attached",
+        ]
+        text = (body or "").lower()
+        return any(re.search(marker, text) for marker in attachment_markers)
     
     def get_clean_body(self) -> str:
         """Get cleaned email body text"""
@@ -198,8 +259,10 @@ class EmailMessage:
             'date': self.date.isoformat() if self.date else None,
             'message_id': self.message_id,
             'body': self.body,
+            'analysis_body': self.analysis_body,
             'has_attachments': self.has_attachments,
             'attachment_count': self.attachment_count,
+            'extracted_attachment_count': self.extracted_attachment_count,
             'attachment_names': [a['filename'] for a in self.attachments]
         }
     
@@ -211,8 +274,9 @@ class EmailMessage:
 class MSGParser:
     """Parse multiple MSG files"""
     
-    def __init__(self):
+    def __init__(self, document_extractor: Optional[DocumentExtractor] = None):
         self.logger = logging.getLogger(__name__)
+        self.document_extractor = document_extractor or DocumentExtractor()
     
     def parse_files(self, msg_files: List[Path]) -> List[EmailMessage]:
         """Parse multiple MSG files"""
@@ -222,7 +286,7 @@ class MSGParser:
         
         for msg_file in msg_files:
             try:
-                message = EmailMessage(msg_file)
+                message = EmailMessage(msg_file, document_extractor=self.document_extractor)
                 messages.append(message)
             except Exception as e:
                 self.logger.error(f"Failed to parse {msg_file}: {e}")

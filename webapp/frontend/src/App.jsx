@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { attachmentsUrl, createJob, getJob, reportUrl } from "./api";
 
-const ACCEPTED_MAX = 50;
+const ACCEPTED_TYPES = ".msg,.txt,.csv,.md,.docx,.pdf,.xlsx,.xlsm";
 
 function App() {
   const [files, setFiles] = useState([]);
@@ -55,11 +55,7 @@ function App() {
     event.preventDefault();
     setError("");
     if (!files.length) {
-      setError("Select at least one .msg file");
-      return;
-    }
-    if (files.length > ACCEPTED_MAX) {
-      setError(`Maximum ${ACCEPTED_MAX} files`);
+      setError("Select at least one supported email or document file");
       return;
     }
     setSubmitting(true);
@@ -81,7 +77,7 @@ function App() {
         <p className="eyebrow">Private Deployment</p>
         <h1>ReportMaster Web Console</h1>
         <p className="subtitle">
-          Upload Outlook `.msg` emails, monitor AI processing, and download final report packages.
+          Upload Outlook `.msg` emails and documents, monitor AI processing, and download final report packages.
         </p>
       </section>
 
@@ -89,10 +85,10 @@ function App() {
         <form className="card" onSubmit={onSubmit}>
           <h2>1. Upload</h2>
           <label className="field">
-            <span>Email files (.msg, up to 50)</span>
+            <span>Email and document files</span>
             <input
               type="file"
-              accept=".msg"
+              accept={ACCEPTED_TYPES}
               multiple
               onChange={onFilesSelected}
             />
@@ -124,13 +120,21 @@ function App() {
           {job?.stats && (
             <div className="stats">
               <p>Total emails: {job.stats.total_messages}</p>
+              <p>Uploaded files: {job.stats.uploaded_files}</p>
+              <p>Unique files: {job.stats.unique_uploaded_files}</p>
+              <p>Duplicate files: {job.stats.duplicate_uploaded_files}</p>
+              <p>Parsed emails: {job.stats.parsed_emails}</p>
+              <p>Parsed documents: {job.stats.parsed_documents}</p>
+              <p>Duplicate messages: {job.stats.duplicate_messages}</p>
               <p>Threads: {job.stats.total_threads}</p>
               <p>Categories: {job.stats.total_categories}</p>
               <p>Attachments: {job.stats.total_attachments}</p>
+              <p>Duplicate attachments: {job.stats.duplicate_attachments}</p>
               <p>Report size: {job.stats.report_size_kb} KB</p>
               <p>Input tokens: {job.stats.input_tokens ?? 0}</p>
               <p>Output tokens: {job.stats.output_tokens ?? 0}</p>
               <p>Total tokens: {job.stats.total_tokens ?? 0}</p>
+              <p>LLM cache hits: {job.stats.llm_cache_hits ?? 0}</p>
             </div>
           )}
           {job?.status === "completed" && (

@@ -1,11 +1,13 @@
 # ReportMaster WebApp
 
-ReportMaster processes Outlook `.msg` emails, groups threads, generates AI-based category summaries, and builds a Word monthly report with attachments.
+ReportMaster processes Outlook `.msg` emails and supporting documents, deduplicates repeated content, groups threads, generates AI-based category summaries, and builds a Word monthly report with attachments.
 
 ## Project Summary
 
 ReportMaster is an internal reporting system that:
-- accepts Outlook email exports (`.msg`)
+- accepts Outlook email exports (`.msg`) and standalone documents (`.pdf`, `.docx`, `.xlsx`, `.txt`, `.csv`, `.md`)
+- extracts text from readable attachments when email body context is limited
+- deduplicates repeated uploads, repeated messages, and repeated attachments before LLM analysis
 - groups messages into discussion threads
 - classifies/summarizes content with LLM APIs
 - generates structured monthly reports for business use
@@ -100,10 +102,14 @@ docker compose up -d --build
 ## Limits and Operational Profile
 
 - Recommended workload: up to `5` concurrent users
-- Up to `50` `.msg` files per job
+- No hard file-count limit in the API; processing is bounded by server disk, memory, and request upload size
+- Document text extraction is capped by `MAX_DOCUMENT_CHARS` per file before LLM analysis
+- LLM analysis results are cached in `CACHE_FOLDER` by content hash to avoid repeated token spend
 
 ## Security/Quality Improvements Implemented
 
+- v1.1.0: Upload-level, message-level, attachment-level, and LLM-cache deduplication
+- v1.1.0: Text extraction from standalone documents and supported email attachments
 - Attachment filename sanitization and path traversal prevention
 - Category deduplication (threads with same AI category are merged)
 - Thread splitting improved by participant overlap + time gap

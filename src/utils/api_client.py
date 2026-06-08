@@ -6,7 +6,9 @@ import json
 import logging
 import re
 import time
+import hashlib
 from typing import Dict, List, Optional
+from pathlib import Path
 from uuid import uuid4
 
 import httpx
@@ -40,7 +42,13 @@ class GigaChatAPIClient:
             "prompt_tokens": 0,
             "completion_tokens": 0,
             "total_tokens": 0,
+            "cache_hits": 0,
+            "cache_misses": 0,
         }
+        cache_dir = Path(config.get("paths", {}).get("cache", "data/cache"))
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        self.cache_path = cache_dir / "llm_analysis_cache.json"
+        self._cache = self._load_cache()
         self.http = httpx.Client(timeout=45.0, verify=self.verify_ssl)
 
         if not self.auth_key or self.auth_key == "not_set":
@@ -56,6 +64,16 @@ class GigaChatAPIClient:
                 "category": subject[:50],
                 "description": "Категория определена по теме переписки",
             }
+
+        cache_key = self._cache_key("categorize", {
+            "subject": subject,
+            "keywords": keywords[:10],
+            "sample_content": sample_content,
+            "model": self.model_categorization,
+        })
+        cached = self._cache_get(cache_key)
+        if cached:
+            return cached
 
         prompt = f"""Проанализируй эту email переписку и предоставь НА РУССКОМ ЯЗЫКЕ:
 1. Краткое название категории (2-4 слова) в формате работы с консультантом или оператором
@@ -87,10 +105,12 @@ class GigaChatAPIClient:
                 elif line.startswith("Описание:") or line.startswith("Description:"):
                     description = line.split(":", 1)[1].strip()
 
-            return {
+            result = {
                 "category": category,
                 "description": description,
             }
+            self._cache_set(cache_key, result)
+            return result
 
         except Exception as e:
             self.logger.error(f"Error categorizing thread: {e}")
@@ -115,6 +135,19 @@ class GigaChatAPIClient:
         combined = "\n\n---\n\n".join(messages[:5])
         organizations = self._extract_organizations(participants)
         organizations_text = ", ".join(organizations) if organizations else "Организации не определены"
+
+        cache_key = self._cache_key("summarize", {
+            "messages": messages[:5],
+            "participants": sorted(participants)[:20],
+            "date_range": date_range,
+            "category": category,
+            "context": context,
+            "model": self.model_summarization,
+            "max_tokens": self.max_tokens,
+        })
+        cached = self._cache_get(cache_key)
+        if cached:
+            return cached
 
         prompt = f"""Ты — профессиональный AI-аналитик и автор ежемесячных проектных отчётов в девелопменте и гостиничном строительстве.
 
@@ -174,9 +207,11 @@ class GigaChatAPIClient:
 
             json_match = re.search(r"\{.*\}", content, re.DOTALL)
             if json_match:
-                return json.loads(json_match.group(0))
+                result = json.loads(json_match.group(0))
+                self._cache_set(cache_key, result)
+                return result
 
-            return {
+            result = {
                 "context": context,
                 "actions": [content[:500]],
                 "result": "Требует уточнения",
@@ -184,6 +219,8 @@ class GigaChatAPIClient:
                 "remarks": "",
                 "recommendations": "",
             }
+            self._cache_set(cache_key, result)
+            return result
 
         except Exception as e:
             self.logger.error(f"Error summarizing thread: {e}")
@@ -260,6 +297,35 @@ class GigaChatAPIClient:
 
     def get_usage_stats(self) -> Dict[str, int]:
         return dict(self._usage)
+
+    def _load_cache(self) -> Dict:
+        if not self.cache_path.exists():
+            return {}
+        try:
+            return json.loads(self.cache_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            self.logger.warning("Could not read LLM cache %s: %s", self.cache_path, exc)
+            return {}
+
+    def _cache_key(self, kind: str, payload: Dict) -> str:
+        normalized = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+        return f"{kind}:{digest}"
+
+    def _cache_get(self, key: str) -> Optional[Dict]:
+        value = self._cache.get(key)
+        if value is not None:
+            self._usage["cache_hits"] += 1
+            return dict(value)
+        self._usage["cache_misses"] += 1
+        return None
+
+    def _cache_set(self, key: str, value: Dict) -> None:
+        self._cache[key] = value
+        try:
+            self.cache_path.write_text(json.dumps(self._cache, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as exc:
+            self.logger.warning("Could not write LLM cache %s: %s", self.cache_path, exc)
 
     def _accumulate_usage(self, usage: Dict) -> None:
         try:

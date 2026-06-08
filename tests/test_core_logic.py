@@ -5,6 +5,9 @@ from types import SimpleNamespace
 from src.analyzers.categorizer import Categorizer
 from src.analyzers.categorizer import ThreadCategory
 from src.generators.attachment_manager import AttachmentManager
+from src.processors.deduplicator import deduplicate_messages, deduplicate_uploads
+from src.processors.document_extractor import DocumentExtractor
+from src.processors.source_document import SourceDocumentLoader
 from src.parsers.thread_builder import ThreadBuilder
 
 
@@ -86,3 +89,50 @@ def test_attachment_folder_name_matches_report_section_format(tmp_path: Path):
     assert folder.exists()
     assert (folder / "spec.pdf").exists()
     assert stats["total_attachments"] == 1
+
+
+def test_deduplicate_uploads_skips_identical_file_bytes():
+    unique, stats = deduplicate_uploads([
+        ("one.msg", b"same"),
+        ("copy.msg", b"same"),
+        ("other.msg", b"different"),
+    ])
+
+    assert len(unique) == 2
+    assert stats.input_count == 3
+    assert stats.unique_count == 2
+    assert stats.duplicate_count == 1
+    assert stats.duplicate_names == ["copy.msg"]
+
+
+def test_deduplicate_messages_uses_normalized_content_when_message_id_missing():
+    now = datetime.now()
+    messages = [
+        SimpleNamespace(subject="RE: Status", sender="a@x.com", date=now, message_id="", body="Hello   world"),
+        SimpleNamespace(subject="Status", sender="a@x.com", date=now, message_id="", body="hello world"),
+    ]
+
+    unique, stats = deduplicate_messages(messages)
+
+    assert len(unique) == 1
+    assert stats.duplicate_count == 1
+
+
+def test_document_extractor_reads_text_file():
+    extractor = DocumentExtractor(max_chars=20)
+    extracted = extractor.extract_bytes("notes.txt", "Привет\nмир".encode("utf-8"))
+
+    assert extracted.has_text
+    assert "Привет" in extracted.text
+    assert extracted.skipped_reason is None
+
+
+def test_source_document_loader_creates_pipeline_message(tmp_path: Path):
+    document = tmp_path / "brief.txt"
+    document.write_text("Контекст проекта и список решений", encoding="utf-8")
+
+    messages = SourceDocumentLoader().load_files([document])
+
+    assert len(messages) == 1
+    assert messages[0].subject == "Документ: brief.txt"
+    assert "Контекст проекта" in messages[0].analysis_body

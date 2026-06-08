@@ -40,5 +40,7 @@ data/output/*
 !data/output/.gitkeep
 data/temp/*
 !data/temp/.gitkeep
+data/cache/*
+!data/cache/.gitkeep
 src/data/output/*
 webapp/frontend/dist/

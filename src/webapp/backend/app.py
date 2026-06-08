@@ -6,12 +6,14 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 
+from src.processors.document_extractor import SUPPORTED_DOCUMENT_EXTENSIONS
 from src.webapp.backend.job_manager import JobManager
 
 
 logger = logging.getLogger(__name__)
-app = FastAPI(title="ReportMaster API", version="1.0.1")
+app = FastAPI(title="ReportMaster API", version="1.1.0")
 job_manager = JobManager()
+SUPPORTED_UPLOAD_EXTENSIONS = {".msg", *SUPPORTED_DOCUMENT_EXTENSIONS}
 
 app.add_middleware(
     CORSMiddleware,
@@ -32,15 +34,17 @@ async def create_job(
     files: List[UploadFile] = File(...),
     report_month: Optional[str] = Form(default=None),
 ):
-    msg_files = [f for f in files if f.filename and f.filename.lower().endswith(".msg")]
-    if not msg_files:
-        raise HTTPException(status_code=400, detail="Upload at least one .msg file")
-    if len(msg_files) > 50:
-        raise HTTPException(status_code=400, detail="Maximum 50 files per run")
+    supported_files = [
+        f for f in files
+        if f.filename and Path(f.filename).suffix.lower() in SUPPORTED_UPLOAD_EXTENSIONS
+    ]
+    if not supported_files:
+        allowed = ", ".join(sorted(SUPPORTED_UPLOAD_EXTENSIONS))
+        raise HTTPException(status_code=400, detail=f"Upload at least one supported file: {allowed}")
 
     payloads = []
     names = []
-    for file in msg_files:
+    for file in supported_files:
         payloads.append(await file.read())
         names.append(Path(file.filename).name)
 

@@ -59,7 +59,8 @@ class Summarizer:
         for thread in category.threads:
             for msg in thread.messages:
                 # Clean message content
-                cleaned = self.content_cleaner.extract_main_content(msg.body)
+                source_text = getattr(msg, "analysis_body", None) or msg.body
+                cleaned = self.content_cleaner.extract_main_content(source_text)
                 if cleaned:
                     all_messages.append(cleaned)
                 

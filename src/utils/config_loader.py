@@ -47,7 +47,13 @@ def load_config():
         'input': Path(os.getenv('INPUT_FOLDER', 'data/input')),
         'output': Path(os.getenv('OUTPUT_FOLDER', 'data/output')),
         'temp': Path(os.getenv('TEMP_FOLDER', 'data/temp')),
-        'logs': Path(os.getenv('LOG_FOLDER', 'logs'))
+        'logs': Path(os.getenv('LOG_FOLDER', 'logs')),
+        'cache': Path(os.getenv('CACHE_FOLDER', 'data/cache'))
+    })
+
+    config.setdefault('processing', {})
+    config['processing'].update({
+        'max_document_chars': int(os.getenv('MAX_DOCUMENT_CHARS', 12000))
     })
     
     return config

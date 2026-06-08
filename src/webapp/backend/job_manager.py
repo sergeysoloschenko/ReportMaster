@@ -13,6 +13,9 @@ from src.analyzers.categorizer import Categorizer
 from src.analyzers.summarizer import Summarizer
 from src.generators.attachment_manager import AttachmentManager
 from src.generators.word_generator import WordReportGenerator
+from src.processors.deduplicator import deduplicate_messages, deduplicate_uploads
+from src.processors.document_extractor import DocumentExtractor, SUPPORTED_DOCUMENT_EXTENSIONS
+from src.processors.source_document import SourceDocumentLoader
 from src.parsers.msg_parser import MSGParser
 from src.parsers.thread_builder import ThreadBuilder
 from src.utils.api_client import ClaudeAPIClient
@@ -49,17 +52,24 @@ class JobManager:
     def create_job(self, files: List[bytes], filenames: List[str], report_month: Optional[str] = None) -> JobState:
         job_id = uuid4().hex
         job = JobState(job_id=job_id)
-        with self.lock:
-            self.jobs[job_id] = job
 
         input_dir = Path(self.config["paths"]["temp"]) / "jobs" / job_id / "input"
         input_dir.mkdir(parents=True, exist_ok=True)
 
-        for data, filename in zip(files, filenames):
+        unique_uploads, upload_stats = deduplicate_uploads(zip(filenames, files))
+        for filename, data, file_hash in unique_uploads:
             safe_name = Path(filename).name
-            if not safe_name.lower().endswith(".msg"):
-                continue
-            (input_dir / safe_name).write_bytes(data)
+            output_path = self._unique_input_path(input_dir, safe_name, file_hash)
+            output_path.write_bytes(data)
+
+        job.stats = {
+            "uploaded_files": upload_stats.input_count,
+            "unique_uploaded_files": upload_stats.unique_count,
+            "duplicate_uploaded_files": upload_stats.duplicate_count,
+        }
+
+        with self.lock:
+            self.jobs[job_id] = job
 
         self.executor.submit(self._run_job, job_id, report_month)
         return job
@@ -105,11 +115,15 @@ class JobManager:
         try:
             config = self.config
             input_dir = Path(config["paths"]["temp"]) / "jobs" / job_id / "input"
-            files = list(input_dir.glob("*.msg"))
-            if not files:
-                raise RuntimeError("No .msg files uploaded")
+            files = [path for path in input_dir.iterdir() if path.is_file()]
+            msg_files = [path for path in files if path.suffix.lower() == ".msg"]
+            document_files = [path for path in files if path.suffix.lower() in SUPPORTED_DOCUMENT_EXTENSIONS]
+            if not msg_files and not document_files:
+                raise RuntimeError("No supported files uploaded")
 
-            parser = MSGParser()
+            document_extractor = DocumentExtractor(max_chars=config.get("processing", {}).get("max_document_chars", 12000))
+            parser = MSGParser(document_extractor=document_extractor)
+            document_loader = SourceDocumentLoader(document_extractor=document_extractor)
             thread_builder = ThreadBuilder(config)
             api_client = ClaudeAPIClient(config)
             categorizer = Categorizer(config, api_client)
@@ -118,10 +132,15 @@ class JobManager:
             attachment_manager = AttachmentManager(config)
 
             self._set_progress(job_id, "parsing", 10)
-            messages = parser.parse_files(files)
+            email_messages = parser.parse_files(msg_files)
+            document_messages = document_loader.load_files(document_files)
+            messages = [*email_messages, *document_messages]
+            unique_messages, message_dedup_stats = deduplicate_messages(messages)
+            if not unique_messages:
+                raise RuntimeError("No readable unique content found in uploaded files")
 
             self._set_progress(job_id, "threading", 30)
-            threads = thread_builder.build_threads(messages)
+            threads = thread_builder.build_threads(unique_messages)
 
             self._set_progress(job_id, "categorization", 50)
             categories = categorizer.categorize_threads(threads)
@@ -145,10 +164,18 @@ class JobManager:
             att_stats = attachment_manager.save_attachments(categories, output_dir)
 
             stats = {
-                "total_messages": len(messages),
+                "uploaded_files": self.get_job(job_id).stats.get("uploaded_files", 0),
+                "unique_uploaded_files": self.get_job(job_id).stats.get("unique_uploaded_files", 0),
+                "duplicate_uploaded_files": self.get_job(job_id).stats.get("duplicate_uploaded_files", 0),
+                "parsed_emails": len(email_messages),
+                "parsed_documents": len(document_messages),
+                "total_messages": len(unique_messages),
+                "duplicate_messages": message_dedup_stats.duplicate_count,
                 "total_threads": len(threads),
                 "total_categories": len(categories),
                 "total_attachments": att_stats["total_attachments"],
+                "unique_attachments": att_stats.get("unique_attachments", att_stats["total_attachments"]),
+                "duplicate_attachments": att_stats.get("duplicate_attachments", 0),
                 "report_size_kb": round(report_path.stat().st_size / 1024, 1),
             }
             usage_stats = api_client.get_usage_stats()
@@ -157,6 +184,8 @@ class JobManager:
                     "input_tokens": usage_stats.get("prompt_tokens", 0),
                     "output_tokens": usage_stats.get("completion_tokens", 0),
                     "total_tokens": usage_stats.get("total_tokens", 0),
+                    "llm_cache_hits": usage_stats.get("cache_hits", 0),
+                    "llm_cache_misses": usage_stats.get("cache_misses", 0),
                 }
             )
 
@@ -171,3 +200,13 @@ class JobManager:
         except Exception as exc:
             self.logger.exception("Job %s failed", job_id)
             self._set_progress(job_id, "failed", 100, status="failed", error=str(exc))
+
+    def _unique_input_path(self, input_dir: Path, filename: str, file_hash: str) -> Path:
+        safe_name = Path(filename).name or f"upload_{file_hash[:12]}"
+        output_path = input_dir / safe_name
+        if not output_path.exists():
+            return output_path
+
+        stem = output_path.stem
+        suffix = output_path.suffix
+        return input_dir / f"{stem}_{file_hash[:12]}{suffix}"

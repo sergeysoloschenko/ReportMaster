@@ -1,8 +1,13 @@
 # Application Settings
 app:
   name: "ReportMaster"
-  version: "1.0.0"
+  version: "1.1.0"
   debug: true
+
+processing:
+  max_document_chars: 12000
+  deduplicate_uploads: true
+  deduplicate_messages: true
 
 # Email Processing
 email:
