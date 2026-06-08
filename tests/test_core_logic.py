@@ -6,7 +6,9 @@ from types import SimpleNamespace
 from src.analyzers.categorizer import Categorizer
 from src.analyzers.categorizer import ThreadCategory
 from src.analyzers.monthly_directions import MonthlyDirectionCategorizer
+from src.analyzers.thread_insights import ThreadInsight, ThreadInsightAnalyzer
 from src.generators.attachment_manager import AttachmentManager
+from src.generators.word_generator import WordReportGenerator
 from src.processors.deduplicator import deduplicate_messages, deduplicate_upload_paths, deduplicate_uploads
 from src.processors.document_extractor import DocumentExtractor
 from src.processors.source_document import SourceDocumentLoader
@@ -20,6 +22,20 @@ class DummyAPIClient:
 
     def categorize_thread(self, subject, keywords, sample_content):
         return {"category": "Общая категория", "description": "test"}
+
+    def analyze_thread_insight(self, thread_payload, directions):
+        return {
+            "direction_id": "DIR_004",
+            "summary": "Dyer направил комментарии по проектным решениям.",
+            "actions": ["Dyer направил комментарии"],
+            "decisions": [],
+            "open_questions": ["Требуется ответ проектной команды"],
+            "risks": [],
+            "next_steps": ["Подготовить консолидированный ответ"],
+            "documents": ["comments.xlsx"],
+            "parties": ["Dyer Group"],
+            "confidence": "high",
+        }
 
 
 def _make_thread(subject: str, body: str = "Body text"):
@@ -188,6 +204,82 @@ def test_monthly_direction_categorizer_uses_fixed_directions():
     assert len(categories) == 6
     dyer_category = next(category for category in categories if category.name == "Взаимодействие с Dyer")
     assert dyer_category.thread_count == 1
+
+
+def test_thread_insight_analyzer_creates_llm_card():
+    now = datetime.now()
+    message = SimpleNamespace(
+        subject="Dyer comments",
+        body="Please review Dyer comments attached",
+        analysis_body="Please review Dyer comments attached",
+        sender="lead@dyergroup.ru",
+        recipients=["pm@example.com"],
+        cc=[],
+        date=now,
+        has_attachments=True,
+        attachments=[{"filename": "comments.xlsx", "size": 100, "extracted_text": "Facade comments"}],
+        message_id="thread-1@example",
+    )
+    thread = SimpleNamespace(
+        thread_id="THREAD_001",
+        subject="Dyer comments",
+        messages=[message],
+        participants={"lead@dyergroup.ru", "pm@example.com"},
+        message_count=1,
+        total_attachments=1,
+    )
+
+    insight = ThreadInsightAnalyzer({}, DummyAPIClient()).analyze_thread(thread)
+
+    assert insight.direction_id == "DIR_004"
+    assert insight.direction_name == "Взаимодействие с Dyer"
+    assert insight.documents == ["comments.xlsx"]
+    assert insight.source_thread is thread
+
+
+def test_monthly_direction_categorizer_groups_thread_insights():
+    thread = SimpleNamespace(message_count=1, total_attachments=0)
+    insight = ThreadInsight(
+        thread_id="THREAD_001",
+        thread_hash="hash",
+        subject="Dyer comments",
+        direction_id="DIR_004",
+        direction_name="Взаимодействие с Dyer",
+        summary="Dyer comments",
+        source_thread=thread,
+    )
+
+    categories = MonthlyDirectionCategorizer().categorize_insights([insight])
+
+    dyer_category = next(category for category in categories if category.category_id == "DIR_004")
+    assert dyer_category.thread_count == 1
+    assert dyer_category.insights == [insight]
+
+
+def test_word_generator_includes_detailed_thread_items():
+    generator = WordReportGenerator({})
+    text = generator._build_investor_cell_text({
+        "category_name": "Взаимодействие с Dyer",
+        "message_count": 3,
+        "overview": "За период обработаны комментарии Dyer по фасадам.",
+        "actions": ["Dyer направил comments.xlsx", "Команда подготовила ответ"],
+        "result": "Вопрос находится в работе.",
+        "parties": "Dyer Group, Спектрум Холдинг",
+        "remarks": "Открыт вопрос по фасадным решениям.",
+        "recommendations": "Подготовить консолидированный ответ.",
+        "thread_items": [
+            {
+                "subject": "Dyer comments",
+                "date_range": "01.05.2026-03.05.2026",
+                "summary": "Обсуждались комментарии по фасадам.",
+                "status": "В работе",
+            }
+        ],
+    })
+
+    assert "Ключевые действия" in text
+    assert "Существенные цепочки" in text
+    assert "Dyer comments" in text
 
 
 def test_deduplicate_uploads_skips_identical_file_bytes():

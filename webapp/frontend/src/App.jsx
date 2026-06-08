@@ -169,6 +169,7 @@ function App() {
               <p>Parsed documents: {job.stats.parsed_documents}</p>
               <p>Duplicate messages: {job.stats.duplicate_messages}</p>
               <p>Threads: {job.stats.total_threads}</p>
+              <p>Thread insights: {job.stats.total_insights ?? 0}</p>
               <p>Categories: {job.stats.total_categories}</p>
               <p>Attachments: {job.stats.total_attachments}</p>
               <p>Duplicate attachments: {job.stats.duplicate_attachments}</p>

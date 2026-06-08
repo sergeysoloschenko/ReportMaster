@@ -13,6 +13,7 @@ from uuid import uuid4
 from src.analyzers.categorizer import ThreadCategory
 from src.analyzers.monthly_directions import MonthlyDirectionCategorizer
 from src.analyzers.summarizer import Summarizer
+from src.analyzers.thread_insights import ThreadInsightAnalyzer
 from src.generators.attachment_manager import AttachmentManager
 from src.generators.word_generator import WordReportGenerator
 from src.processors.deduplicator import deduplicate_messages, deduplicate_upload_paths, deduplicate_uploads
@@ -175,6 +176,7 @@ class JobManager:
             document_loader = SourceDocumentLoader(document_extractor=document_extractor)
             thread_builder = ThreadBuilder(config)
             api_client = ClaudeAPIClient(config)
+            insight_analyzer = ThreadInsightAnalyzer(config, api_client)
             summarizer = Summarizer(config, api_client)
             word_generator = WordReportGenerator(config)
             attachment_manager = AttachmentManager(config)
@@ -194,11 +196,14 @@ class JobManager:
             output_dir.mkdir(parents=True, exist_ok=True)
 
             if mode == MONTHLY_MODE:
-                self._set_progress(job_id, "direction_classification", 50)
-                categories = MonthlyDirectionCategorizer().categorize_threads(threads)
+                self._set_progress(job_id, "thread_insights", 45)
+                insights = insight_analyzer.analyze_threads(threads)
 
-                self._set_progress(job_id, "summarization", 70)
-                summaries = summarizer.summarize_categories(categories)
+                self._set_progress(job_id, "direction_classification", 60)
+                categories = MonthlyDirectionCategorizer().categorize_insights(insights)
+
+                self._set_progress(job_id, "direction_summarization", 75)
+                summaries = summarizer.summarize_monthly_categories_from_insights(categories)
 
                 report_filename = f"Monthly_Report_{datetime.now().strftime('%Y_%m_%d_%H%M')}.docx"
                 report_path = output_dir / report_filename
@@ -213,6 +218,7 @@ class JobManager:
                 self._set_progress(job_id, "attachments", 95)
                 att_stats = attachment_manager.save_attachments(categories, output_dir)
                 total_categories = len(categories)
+                total_insights = len(insights)
             else:
                 self._set_progress(job_id, "custom_analysis", 70)
                 source_texts = self._collect_source_texts(unique_messages)
@@ -238,6 +244,7 @@ class JobManager:
                     custom_category.add_thread(thread)
                 att_stats = attachment_manager.save_attachments([custom_category], output_dir)
                 total_categories = 0
+                total_insights = 0
 
             stats = {
                 "mode": mode,
@@ -250,6 +257,7 @@ class JobManager:
                 "duplicate_messages": message_dedup_stats.duplicate_count,
                 "total_threads": len(threads),
                 "total_categories": total_categories,
+                "total_insights": total_insights,
                 "total_attachments": att_stats["total_attachments"],
                 "unique_attachments": att_stats.get("unique_attachments", att_stats["total_attachments"]),
                 "duplicate_attachments": att_stats.get("duplicate_attachments", 0),

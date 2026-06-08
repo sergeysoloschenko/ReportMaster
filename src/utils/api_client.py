@@ -235,6 +235,163 @@ class GigaChatAPIClient:
                 "recommendations": "Проверить корректность GigaChat ключа и повторить генерацию",
             }
 
+    def analyze_thread_insight(self, thread_payload: Dict, directions: List[Dict]) -> Dict:
+        """Analyze one email thread early and return a reusable structured card."""
+        fallback = self._fallback_thread_insight(thread_payload, directions)
+        if not self.client:
+            return fallback
+
+        cache_key = self._cache_key("thread_insight_v1", {
+            "thread_hash": thread_payload.get("thread_hash"),
+            "subject": thread_payload.get("subject"),
+            "message_count": thread_payload.get("message_count"),
+            "attachment_count": thread_payload.get("attachment_count"),
+            "model": self.model_summarization,
+        })
+        cached = self._cache_get(cache_key)
+        if cached:
+            return cached
+
+        directions_text = "\n".join(
+            f"- {item['direction_id']}: {item['name']} — {item['description']}"
+            for item in directions
+        )
+        source_json = json.dumps(thread_payload, ensure_ascii=False, indent=2)[:12000]
+
+        prompt = f"""Ты — старший проектный аналитик. Проанализируй ОДНУ email-цепочку до формирования ежемесячного отчёта.
+
+Задача: извлечь факты, документы, решения, открытые вопросы и выбрать направление отчёта.
+
+Правила:
+- Пиши по-русски, деловым нейтральным стилем.
+- Не выдумывай факты.
+- Не используй ФИО конкретных людей; замени на организации по email-доменам и контексту.
+- Если письмо пересылает документ или есть вложение, явно укажи документ/вложение в documents.
+- direction_id должен быть строго одним из списка.
+
+Направления отчёта:
+{directions_text}
+
+Email-цепочка в JSON:
+{source_json}
+
+Верни СТРОГО JSON:
+{{
+  "direction_id": "DIR_001|DIR_002|DIR_003|DIR_004|DIR_005|DIR_006",
+  "summary": "3-5 предложений о сути цепочки и ее значении для проекта",
+  "actions": ["конкретное действие/направление документа/обсуждение"],
+  "decisions": ["принятые или зафиксированные решения, если есть"],
+  "open_questions": ["незакрытый вопрос, если есть"],
+  "risks": ["риск или замечание, если есть"],
+  "next_steps": ["следующий шаг, если вытекает из переписки"],
+  "documents": ["название документа или вложения"],
+  "parties": ["организация 1", "организация 2"],
+  "confidence": "high|medium|low"
+}}"""
+
+        try:
+            content = self._chat_completion(
+                prompt=prompt,
+                model=self.model_summarization,
+                max_tokens=min(self.max_tokens, 1800),
+            )
+            result = self._json_from_content(content) or fallback
+            result = self._normalize_thread_insight_result(result, fallback)
+            self._cache_set(cache_key, result)
+            return result
+        except Exception as e:
+            self.logger.error("Error analyzing thread insight: %s", e)
+            if self._is_auth_error(e):
+                self.client = None
+            return fallback
+
+    def summarize_direction_insights(self, direction: Dict, insights: List[Dict], date_range: str) -> Dict:
+        """Generate a monthly direction report from pre-analyzed thread cards."""
+        if not insights:
+            return {
+                "category_name": direction["name"],
+                "date_range": "Н/Д",
+                "participants": [],
+                "message_count": 0,
+                "attachment_count": 0,
+                "context": direction.get("description", ""),
+                "overview": "Активность за период не выявлена.",
+                "actions": [],
+                "result": "Активность за период не выявлена.",
+                "parties": "",
+                "remarks": "",
+                "recommendations": "",
+                "thread_items": [],
+            }
+
+        fallback = self._fallback_direction_summary(direction, insights, date_range)
+        if not self.client:
+            return fallback
+
+        cache_key = self._cache_key("direction_summary_v1", {
+            "direction_id": direction.get("direction_id"),
+            "insight_hashes": [item.get("thread_hash") for item in insights],
+            "model": self.model_summarization,
+            "max_tokens": self.max_tokens,
+        })
+        cached = self._cache_get(cache_key)
+        if cached:
+            return cached
+
+        source_json = json.dumps(insights, ensure_ascii=False, indent=2)[:18000]
+        prompt = f"""Ты — автор ежемесячного отчёта для инвестора по гостиничному девелопмент-проекту.
+
+На входе карточки email-цепочек, уже проанализированные LLM. Сформируй содержательный раздел отчёта по направлению.
+
+Направление: {direction['name']}
+Описание направления: {direction.get('description', '')}
+Период: {date_range}
+
+Правила:
+- Пиши по-русски, деловым нейтральным стилем.
+- Не используй ФИО конкретных людей, только организации.
+- Укажи конкретные документы, обсуждения, согласования, решения и незакрытые вопросы.
+- Не сжимай до общих фраз вроде "велась переписка"; нужны факты.
+- Если данных мало, честно укажи ограниченность данных.
+
+Карточки цепочек:
+{source_json}
+
+Верни СТРОГО JSON:
+{{
+  "context": "фон/цель направления за месяц",
+  "overview": "развернутый обзор 1-3 абзаца",
+  "actions": ["конкретное действие 1", "конкретное действие 2"],
+  "result": "текущий статус и результат работ",
+  "parties": "ключевые организации",
+  "remarks": "замечания, риски и открытые вопросы",
+  "recommendations": "следующие шаги и рекомендации",
+  "thread_items": [
+    {{
+      "subject": "тема цепочки",
+      "date_range": "даты",
+      "summary": "1-2 предложения о цепочке",
+      "status": "решено/в работе/требует решения"
+    }}
+  ]
+}}"""
+
+        try:
+            content = self._chat_completion(
+                prompt=prompt,
+                model=self.model_summarization,
+                max_tokens=self.max_tokens,
+            )
+            result = self._json_from_content(content) or fallback
+            result = self._normalize_direction_summary_result(result, fallback)
+            self._cache_set(cache_key, result)
+            return result
+        except Exception as e:
+            self.logger.error("Error summarizing direction insights: %s", e)
+            if self._is_auth_error(e):
+                self.client = None
+            return fallback
+
     def run_custom_analysis(self, user_prompt: str, source_texts: List[str], title: str = "Пользовательский анализ") -> Dict:
         combined = "\n\n--- SOURCE ---\n\n".join(text for text in source_texts if text.strip())
         if not combined:
@@ -293,6 +450,120 @@ class GigaChatAPIClient:
                 "title": title,
                 "analysis": "Не удалось выполнить пользовательский анализ через LLM. Проверьте ключ и повторите запуск.",
             }
+
+    def _json_from_content(self, content: str) -> Optional[Dict]:
+        json_match = re.search(r"\{.*\}", content or "", re.DOTALL)
+        if not json_match:
+            return None
+        try:
+            return json.loads(json_match.group(0))
+        except json.JSONDecodeError:
+            return None
+
+    def _normalize_thread_insight_result(self, result: Dict, fallback: Dict) -> Dict:
+        normalized = dict(fallback)
+        normalized.update({key: value for key, value in result.items() if value is not None})
+        normalized["direction_id"] = self._normalize_direction_id(normalized.get("direction_id"))
+        for key in ("actions", "decisions", "open_questions", "risks", "next_steps", "documents", "parties"):
+            normalized[key] = self._ensure_string_list(normalized.get(key))
+        normalized["summary"] = str(normalized.get("summary") or fallback.get("summary", "")).strip()
+        normalized["confidence"] = str(normalized.get("confidence") or "medium").strip()
+        return normalized
+
+    def _normalize_direction_summary_result(self, result: Dict, fallback: Dict) -> Dict:
+        normalized = dict(fallback)
+        normalized.update({key: value for key, value in result.items() if value is not None})
+        normalized["actions"] = self._ensure_string_list(normalized.get("actions"))
+        if not isinstance(normalized.get("thread_items"), list):
+            normalized["thread_items"] = fallback.get("thread_items", [])
+        return normalized
+
+    def _fallback_thread_insight(self, thread_payload: Dict, directions: List[Dict]) -> Dict:
+        text = json.dumps(thread_payload, ensure_ascii=False).lower()
+        direction_id = self._heuristic_direction_id(text)
+        attachments = []
+        for message in thread_payload.get("messages", []):
+            for attachment in message.get("attachments", []):
+                filename = attachment.get("filename")
+                if filename:
+                    attachments.append(filename)
+        return {
+            "direction_id": direction_id,
+            "summary": f"Обработана цепочка «{thread_payload.get('subject', 'Без темы')}» за период {thread_payload.get('date_range', 'Н/Д')}.",
+            "actions": ["Проанализирована переписка и связанные материалы по цепочке."],
+            "decisions": [],
+            "open_questions": [],
+            "risks": [],
+            "next_steps": [],
+            "documents": attachments[:10],
+            "parties": self._extract_organizations(thread_payload.get("participants", [])),
+            "confidence": "low",
+        }
+
+    def _fallback_direction_summary(self, direction: Dict, insights: List[Dict], date_range: str) -> Dict:
+        actions = []
+        parties = set()
+        attachments = 0
+        messages = 0
+        thread_items = []
+        for item in insights:
+            messages += int(item.get("message_count", 0) or 0)
+            attachments += int(item.get("attachment_count", 0) or 0)
+            actions.extend(self._ensure_string_list(item.get("actions"))[:3])
+            parties.update(self._ensure_string_list(item.get("parties")))
+            thread_items.append({
+                "subject": item.get("subject", ""),
+                "date_range": item.get("date_range", ""),
+                "summary": item.get("summary", ""),
+                "status": "В работе",
+            })
+        return {
+            "category_name": direction["name"],
+            "date_range": date_range,
+            "participants": sorted(parties)[:10],
+            "message_count": messages,
+            "attachment_count": attachments,
+            "context": direction.get("description", ""),
+            "overview": " ".join(item.get("summary", "") for item in insights[:6] if item.get("summary")),
+            "actions": actions[:12],
+            "result": "Статус сформирован по карточкам цепочек; требуется проверка финальной редакции.",
+            "parties": ", ".join(sorted(parties)[:12]),
+            "remarks": "; ".join(
+                value
+                for item in insights
+                for value in self._ensure_string_list(item.get("risks") or item.get("open_questions"))
+            )[:1200],
+            "recommendations": "; ".join(
+                value
+                for item in insights
+                for value in self._ensure_string_list(item.get("next_steps"))
+            )[:1200],
+            "thread_items": thread_items[:20],
+        }
+
+    def _heuristic_direction_id(self, text: str) -> str:
+        if "dyer" in text or "groupdyer" in text:
+            return "DIR_004"
+        if "dusit" in text and re.search(r"договор|agreement|hma|term sheet|loi", text):
+            return "DIR_001"
+        if "dusit" in text and re.search(r"design|technical|техничес|проект|standard|brand", text):
+            return "DIR_002"
+        if re.search(r"заказчик|инвестор|client|investor|port-gdz|порт геленджик", text):
+            return "DIR_005"
+        if re.search(r"консультант|consultant|архитект|проектиров|инженер", text):
+            return "DIR_003"
+        return "DIR_006"
+
+    def _normalize_direction_id(self, value: str) -> str:
+        value = str(value or "").strip()
+        return value if value in {"DIR_001", "DIR_002", "DIR_003", "DIR_004", "DIR_005", "DIR_006"} else "DIR_006"
+
+    def _ensure_string_list(self, value) -> List[str]:
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+        if isinstance(value, str) and value.strip():
+            return [value.strip()]
+        return []
 
     def _get_access_token(self) -> str:
         now = int(time.time())

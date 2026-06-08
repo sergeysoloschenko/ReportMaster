@@ -19,10 +19,18 @@ class ThreadCategory:
         self.name = name
         self.description = description
         self.threads = []
+        self.insights = []
     
     def add_thread(self, thread: EmailThread):
         """Add thread to this category"""
         self.threads.append(thread)
+
+    def add_insight(self, insight):
+        """Add pre-analyzed thread insight and keep its source thread for attachments."""
+        self.insights.append(insight)
+        source_thread = getattr(insight, "source_thread", None)
+        if source_thread is not None:
+            self.add_thread(source_thread)
     
     @property
     def thread_count(self):

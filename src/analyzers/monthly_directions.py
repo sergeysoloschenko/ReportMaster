@@ -115,6 +115,20 @@ class MonthlyDirectionCategorizer:
 
         return categories
 
+    def categorize_insights(self, insights: List["ThreadInsight"]) -> List[ThreadCategory]:
+        categories = [
+            ThreadCategory(direction.direction_id, direction.name, direction.description)
+            for direction in MONTHLY_DIRECTIONS
+        ]
+        by_id: Dict[str, ThreadCategory] = {category.category_id: category for category in categories}
+
+        for insight in insights:
+            category = by_id.get(insight.direction_id) or by_id["DIR_006"]
+            category.add_insight(insight)
+            self.logger.info("Monthly insight direction: %s -> %s", insight.subject[:60], category.name)
+
+        return categories
+
     def _classify_thread(self, thread: EmailThread) -> ReportDirection:
         text = self._thread_text(thread)
 

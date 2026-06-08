@@ -4,6 +4,7 @@ Creates formal monthly reports following the consultant/operator section templat
 """
 
 import logging
+import re
 from pathlib import Path
 from datetime import datetime
 from docx import Document
@@ -175,27 +176,76 @@ class WordReportGenerator:
             self._format_row(row_cells, is_header=False)
 
     def _build_investor_cell_text(self, summary_data: Dict) -> str:
-        """Build concise narrative like in investor sample."""
-        actions = summary_data.get("actions", []) or []
-        actions_text = " ".join(a.strip() for a in actions if a and a.strip())
-        if not actions_text and summary_data.get("message_count", 0) == 0:
-            actions_text = "Активность по направлению за отчетный период не выявлена."
-        elif not actions_text:
-            actions_text = "Проведена рабочая переписка по профильному вопросу."
+        """Build detailed monthly narrative for investor-style table."""
+        if summary_data.get("message_count", 0) == 0:
+            return (
+                f"{summary_data.get('category_name', '')}\n\n"
+                "Активность по направлению за отчетный период не выявлена."
+            ).strip()
 
-        result = (summary_data.get("result") or "").strip()
-        if not result:
-            result = "Статус уточняется."
-
+        blocks = []
         category_name = (summary_data.get("category_name") or "").strip()
         if category_name:
-            actions_text = f"{category_name}\n\n{actions_text}"
+            blocks.append(category_name)
 
-        # Keep text concise for table layout.
-        actions_text = actions_text[:900].rstrip()
-        result = result[:300].rstrip()
+        overview = (summary_data.get("overview") or summary_data.get("context") or "").strip()
+        if overview:
+            blocks.append(overview)
 
-        return f"{actions_text}\n\nРезультат работ: {result}"
+        actions = summary_data.get("actions", []) or []
+        if actions:
+            blocks.append("Ключевые действия:\n" + self._numbered_lines(actions, limit=10))
+
+        result = (summary_data.get("result") or "").strip()
+        if result:
+            blocks.append(f"Результат / статус: {result}")
+
+        parties = (summary_data.get("parties") or "").strip()
+        if parties:
+            blocks.append(f"Стороны / контрагенты: {parties}")
+
+        remarks = (summary_data.get("remarks") or "").strip()
+        if remarks:
+            blocks.append(f"Замечания / риски: {remarks}")
+
+        recommendations = (summary_data.get("recommendations") or "").strip()
+        if recommendations:
+            blocks.append(f"Рекомендации / следующие шаги: {recommendations}")
+
+        thread_items = summary_data.get("thread_items", []) or []
+        if thread_items:
+            blocks.append("Существенные цепочки:\n" + self._thread_item_lines(thread_items, limit=12))
+
+        return "\n\n".join(block for block in blocks if block).strip()
+
+    def _numbered_lines(self, items: List[str], limit: int = 10) -> str:
+        lines = []
+        for idx, item in enumerate(items[:limit], 1):
+            text = str(item).strip()
+            if not text:
+                continue
+            text = re.sub(r"^\d+[\).\s-]+", "", text)
+            lines.append(f"{idx}. {text}")
+        return "\n".join(lines)
+
+    def _thread_item_lines(self, items: List[Dict], limit: int = 12) -> str:
+        lines = []
+        for idx, item in enumerate(items[:limit], 1):
+            subject = str(item.get("subject") or "Без темы").strip()
+            date_range = str(item.get("date_range") or "").strip()
+            summary = str(item.get("summary") or "").strip()
+            status = str(item.get("status") or "").strip()
+            suffix = []
+            if date_range:
+                suffix.append(date_range)
+            if status:
+                suffix.append(status)
+            meta = f" ({'; '.join(suffix)})" if suffix else ""
+            if summary:
+                lines.append(f"{idx}. {subject}{meta}: {summary}")
+            else:
+                lines.append(f"{idx}. {subject}{meta}")
+        return "\n".join(lines)
 
     def _format_row(self, cells, is_header: bool):
         """Apply alignment/font to row cells."""

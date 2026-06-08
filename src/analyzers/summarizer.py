@@ -6,6 +6,7 @@ Generates structured AI summaries for email threads following formal report temp
 import logging
 from typing import List, Dict
 from src.analyzers.categorizer import ThreadCategory
+from src.analyzers.monthly_directions import MONTHLY_DIRECTIONS
 from src.utils.api_client import ClaudeAPIClient
 from src.parsers.content_cleaner import ContentCleaner
 
@@ -46,6 +47,46 @@ class Summarizer:
         
         self.logger.info("✓ All summaries generated")
         
+        return summaries
+
+    def summarize_monthly_categories_from_insights(self, categories: List[ThreadCategory]) -> dict:
+        """Generate monthly direction summaries from early LLM thread insight cards."""
+        self.logger.info("Generating monthly summaries from thread insights for %s categories...", len(categories))
+        summaries = {}
+
+        for category in categories:
+            insights = getattr(category, "insights", []) or []
+            direction = next(
+                (
+                    {
+                        "direction_id": item.direction_id,
+                        "name": item.name,
+                        "description": item.description,
+                    }
+                    for item in MONTHLY_DIRECTIONS
+                    if item.direction_id == category.category_id
+                ),
+                {
+                    "direction_id": category.category_id,
+                    "name": category.name,
+                    "description": category.description,
+                },
+            )
+            date_range = self._category_date_range(category)
+            insight_payloads = [self._insight_payload(insight) for insight in insights]
+            summary = self.api_client.summarize_direction_insights(direction, insight_payloads, date_range)
+            summary.update(
+                {
+                    "category_name": category.name,
+                    "date_range": date_range if insights else "Н/Д",
+                    "participants": self._category_participants(category),
+                    "message_count": category.total_messages,
+                    "attachment_count": category.total_attachments,
+                    "insight_count": len(insights),
+                }
+            )
+            summaries[category.category_id] = summary
+
         return summaries
     
     def _summarize_category(self, category: ThreadCategory) -> dict:
@@ -128,6 +169,51 @@ class Summarizer:
             'remarks': structured_summary.get('remarks', ''),
             'recommendations': structured_summary.get('recommendations', '')
         }
+
+    def _insight_payload(self, insight) -> Dict:
+        return {
+            "thread_id": insight.thread_id,
+            "thread_hash": insight.thread_hash,
+            "subject": insight.subject,
+            "direction_id": insight.direction_id,
+            "direction_name": insight.direction_name,
+            "summary": insight.summary,
+            "actions": insight.actions,
+            "decisions": insight.decisions,
+            "open_questions": insight.open_questions,
+            "risks": insight.risks,
+            "next_steps": insight.next_steps,
+            "documents": insight.documents,
+            "parties": insight.parties,
+            "date_range": insight.date_range,
+            "message_count": insight.message_count,
+            "attachment_count": insight.attachment_count,
+            "confidence": insight.confidence,
+        }
+
+    def _category_date_range(self, category: ThreadCategory) -> str:
+        dates = []
+        for thread in category.threads:
+            for msg in thread.messages:
+                if msg.date:
+                    dates.append(msg.date)
+        if not dates:
+            return "Н/Д"
+        dates.sort()
+        start = dates[0].strftime('%d.%m.%Y')
+        end = dates[-1].strftime('%d.%m.%Y')
+        return f"{start}-{end}" if start != end else start
+
+    def _category_participants(self, category: ThreadCategory) -> List[str]:
+        participants = set()
+        for insight in getattr(category, "insights", []) or []:
+            participants.update(insight.parties)
+        if participants:
+            return sorted(participants)[:10]
+
+        for thread in category.threads:
+            participants.update(thread.participants)
+        return sorted(participants)[:10]
 
 
 if __name__ == "__main__":
