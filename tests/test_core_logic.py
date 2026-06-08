@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from email.message import Message
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -9,6 +10,7 @@ from src.generators.attachment_manager import AttachmentManager
 from src.processors.deduplicator import deduplicate_messages, deduplicate_upload_paths, deduplicate_uploads
 from src.processors.document_extractor import DocumentExtractor
 from src.processors.source_document import SourceDocumentLoader
+from src.parsers.msg_parser import EmailMessage
 from src.parsers.thread_builder import ThreadBuilder
 
 
@@ -107,6 +109,21 @@ def test_thread_builder_links_messages_by_rfc_headers_before_subject_matching():
 
     assert len(threads) == 1
     assert threads[0].message_count == 2
+
+
+def test_msg_parser_accepts_header_message_object():
+    headers = Message()
+    headers["Message-ID"] = "<root@example>"
+    headers["In-Reply-To"] = "<parent@example>"
+    headers["References"] = "<grandparent@example> <parent@example>"
+    msg = SimpleNamespace(header=headers, messageId="")
+    email = EmailMessage.__new__(EmailMessage)
+
+    email._extract_header_metadata(msg)
+
+    assert email.message_id == "root@example"
+    assert email.in_reply_to == "parent@example"
+    assert email.references == ["grandparent@example", "parent@example"]
 
 
 def test_attachment_folder_name_matches_report_section_format(tmp_path: Path):

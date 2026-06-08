@@ -10,6 +10,7 @@ import logging
 from typing import Dict, List, Optional
 import hashlib
 import re
+from email.message import Message as HeaderMessage
 from email.parser import Parser
 
 from src.processors.deduplicator import hash_text
@@ -142,16 +143,13 @@ class EmailMessage:
         
         # Method 3: Try msg.header for received date
         try:
-            if hasattr(msg, 'header') and msg.header:
-                header = msg.header
-                # Look for Date: header
-                for line in header.split('\n'):
-                    if line.lower().startswith('date:'):
-                        date_str = line.split(':', 1)[1].strip()
-                        from dateutil import parser as date_parser
-                        parsed = date_parser.parse(date_str)
-                        self.logger.debug(f"Date from header: {parsed}")
-                        return parsed
+            parsed_headers = self._parse_msg_headers(msg)
+            date_str = parsed_headers.get("Date", "") if parsed_headers else ""
+            if date_str:
+                from dateutil import parser as date_parser
+                parsed = date_parser.parse(date_str)
+                self.logger.debug(f"Date from header: {parsed}")
+                return parsed
         except Exception as e:
             self.logger.debug(f"Header parsing failed: {e}")
         
@@ -177,8 +175,7 @@ class EmailMessage:
 
     def _extract_header_metadata(self, msg) -> None:
         """Extract message threading headers where extract_msg exposes them."""
-        raw_header = getattr(msg, "header", "") or ""
-        parsed_headers = Parser().parsestr(raw_header) if raw_header else {}
+        parsed_headers = self._parse_msg_headers(msg)
 
         self.message_id = self._clean_message_id(
             getattr(msg, "messageId", "") or parsed_headers.get("Message-ID", "")
@@ -186,6 +183,18 @@ class EmailMessage:
         self.in_reply_to = self._clean_message_id(parsed_headers.get("In-Reply-To", ""))
         references_header = parsed_headers.get("References", "")
         self.references = self._extract_message_ids(references_header)
+
+    def _parse_msg_headers(self, msg):
+        raw_header = getattr(msg, "header", None)
+        if not raw_header:
+            return {}
+        if isinstance(raw_header, str):
+            return Parser().parsestr(raw_header)
+        if isinstance(raw_header, HeaderMessage):
+            return raw_header
+        if hasattr(raw_header, "get"):
+            return raw_header
+        return Parser().parsestr(str(raw_header))
 
     def _clean_message_id(self, value: str) -> str:
         ids = self._extract_message_ids(value)
