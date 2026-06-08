@@ -80,7 +80,8 @@ class EmailMessage:
             self.html_body = msg.htmlBody or ""
             
             # Extract attachments
-            self.attachments = self._extract_attachments(msg)
+            extract_attachment_text = self._should_include_attachment_text(self.body or self.html_body)
+            self.attachments = self._extract_attachments(msg, extract_text=extract_attachment_text)
             self.has_attachments = len(self.attachments) > 0
             self.extracted_attachment_count = sum(1 for att in self.attachments if att.get("extracted_text"))
             self.normalized_body_hash = hash_text(self.body or self.html_body or "")
@@ -211,7 +212,7 @@ class EmailMessage:
         tokens = re.split(r"\s+", value.strip())
         return [token.strip().strip("<>").lower() for token in tokens if token.strip()]
     
-    def _extract_attachments(self, msg) -> List[Dict]:
+    def _extract_attachments(self, msg, extract_text: bool = True) -> List[Dict]:
         """Extract attachment information"""
         attachments = []
         
@@ -219,14 +220,21 @@ class EmailMessage:
             for attachment in msg.attachments:
                 filename = attachment.longFilename or attachment.shortFilename or 'unnamed'
                 data = attachment.data if hasattr(attachment, 'data') else None
-                extracted = self.document_extractor.extract_bytes(filename, data)
+                content_hash = self.document_extractor.hash_bytes(data or b"")
+                extracted_text = ""
+                extraction_status = "not_needed"
+                if extract_text:
+                    extracted = self.document_extractor.extract_bytes(filename, data)
+                    content_hash = extracted.content_hash
+                    extracted_text = extracted.text
+                    extraction_status = extracted.skipped_reason or 'ok'
                 att_info = {
                     'filename': filename,
                     'size': len(data) if data else 0,
                     'data': data,
-                    'content_hash': extracted.content_hash,
-                    'extracted_text': extracted.text,
-                    'extraction_status': extracted.skipped_reason or 'ok'
+                    'content_hash': content_hash,
+                    'extracted_text': extracted_text,
+                    'extraction_status': extraction_status
                 }
                 attachments.append(att_info)
         except Exception as e:
@@ -251,15 +259,20 @@ class EmailMessage:
             )
 
         if not attachment_texts:
+            if self.attachments:
+                return "\n\n".join([body, self._attachment_index_text()]).strip()
             return body
 
         if self._should_include_attachment_text(body):
             return "\n\n".join([body, *attachment_texts]).strip()
 
+        return "\n\n".join([body, self._attachment_index_text()]).strip()
+
+    def _attachment_index_text(self) -> str:
         attachment_index = "; ".join(
             attachment.get("filename", "unnamed") for attachment in self.attachments
         )
-        return "\n\n".join([body, f"[Вложения без полного текста в LLM-контексте: {attachment_index}]"]).strip()
+        return f"[Вложения без полного текста в LLM-контексте: {attachment_index}]"
 
     def _should_include_attachment_text(self, body: str) -> bool:
         if len((body or "").strip()) < 700:

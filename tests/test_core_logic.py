@@ -126,6 +126,22 @@ def test_msg_parser_accepts_header_message_object():
     assert email.references == ["grandparent@example", "parent@example"]
 
 
+def test_msg_parser_can_skip_attachment_text_extraction():
+    attachment = SimpleNamespace(longFilename="notes.txt", shortFilename="", data=b"important text")
+    msg = SimpleNamespace(attachments=[attachment])
+    email = EmailMessage.__new__(EmailMessage)
+    email.logger = SimpleNamespace(warning=lambda *args, **kwargs: None)
+    email.document_extractor = DocumentExtractor()
+
+    attachments = email._extract_attachments(msg, extract_text=False)
+
+    assert len(attachments) == 1
+    assert attachments[0]["filename"] == "notes.txt"
+    assert attachments[0]["data"] == b"important text"
+    assert attachments[0]["extracted_text"] == ""
+    assert attachments[0]["extraction_status"] == "not_needed"
+
+
 def test_attachment_folder_name_matches_report_section_format(tmp_path: Path):
     manager = AttachmentManager({})
     category = ThreadCategory("CAT_001", "Согласование ТЗ")
