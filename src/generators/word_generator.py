@@ -188,7 +188,7 @@ class WordReportGenerator:
         if category_name:
             blocks.append(category_name)
 
-        overview = (summary_data.get("overview") or summary_data.get("context") or "").strip()
+        overview = self._as_text(summary_data.get("overview") or summary_data.get("context"))
         if overview:
             blocks.append(overview)
 
@@ -196,19 +196,19 @@ class WordReportGenerator:
         if actions:
             blocks.append("Ключевые действия:\n" + self._numbered_lines(actions, limit=10))
 
-        result = (summary_data.get("result") or "").strip()
+        result = self._as_text(summary_data.get("result"))
         if result:
             blocks.append(f"Результат / статус: {result}")
 
-        parties = (summary_data.get("parties") or "").strip()
+        parties = self._as_text(summary_data.get("parties"))
         if parties:
             blocks.append(f"Стороны / контрагенты: {parties}")
 
-        remarks = (summary_data.get("remarks") or "").strip()
+        remarks = self._as_text(summary_data.get("remarks"))
         if remarks:
             blocks.append(f"Замечания / риски: {remarks}")
 
-        recommendations = (summary_data.get("recommendations") or "").strip()
+        recommendations = self._as_text(summary_data.get("recommendations"))
         if recommendations:
             blocks.append(f"Рекомендации / следующие шаги: {recommendations}")
 
@@ -217,6 +217,19 @@ class WordReportGenerator:
             blocks.append("Существенные цепочки:\n" + self._thread_item_lines(thread_items, limit=12))
 
         return "\n\n".join(block for block in blocks if block).strip()
+
+    def _as_text(self, value) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, list):
+            return "; ".join(str(item).strip() for item in value if str(item).strip())
+        if isinstance(value, dict):
+            return "; ".join(
+                f"{key}: {item}"
+                for key, item in value.items()
+                if str(item).strip()
+            )
+        return str(value).strip()
 
     def _numbered_lines(self, items: List[str], limit: int = 10) -> str:
         lines = []

@@ -282,6 +282,24 @@ def test_word_generator_includes_detailed_thread_items():
     assert "Dyer comments" in text
 
 
+def test_word_generator_accepts_llm_list_fields():
+    generator = WordReportGenerator({})
+    text = generator._build_investor_cell_text({
+        "category_name": "Работа с консультантами проекта",
+        "message_count": 2,
+        "overview": ["Обработаны комментарии консультантов.", "Подготовлен ответ."],
+        "actions": ["Направлены материалы"],
+        "result": ["В работе"],
+        "parties": ["Спектрум Холдинг", "Dyer Group"],
+        "remarks": ["Есть открытый вопрос"],
+        "recommendations": ["Подготовить ответ"],
+    })
+
+    assert "Спектрум Холдинг; Dyer Group" in text
+    assert "Есть открытый вопрос" in text
+    assert "Подготовить ответ" in text
+
+
 def test_deduplicate_uploads_skips_identical_file_bytes():
     unique, stats = deduplicate_uploads([
         ("one.msg", b"same"),
