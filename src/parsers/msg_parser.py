@@ -9,8 +9,8 @@ from datetime import datetime
 import logging
 from typing import Dict, List, Optional
 import hashlib
-import struct
 import re
+from email.parser import Parser
 
 from src.processors.deduplicator import hash_text
 from src.processors.document_extractor import DocumentExtractor
@@ -72,7 +72,7 @@ class EmailMessage:
             # Extract date using multiple methods
             self.date = self._extract_date_robust(msg)
             
-            self.message_id = getattr(msg, 'messageId', '')
+            self._extract_header_metadata(msg)
             
             # Extract body content
             self.body = msg.body or ""
@@ -174,6 +174,33 @@ class EmailMessage:
         
         recipients = [r.strip() for r in recipients_str.replace(';', ',').split(',')]
         return [r for r in recipients if r]
+
+    def _extract_header_metadata(self, msg) -> None:
+        """Extract message threading headers where extract_msg exposes them."""
+        raw_header = getattr(msg, "header", "") or ""
+        parsed_headers = Parser().parsestr(raw_header) if raw_header else {}
+
+        self.message_id = self._clean_message_id(
+            getattr(msg, "messageId", "") or parsed_headers.get("Message-ID", "")
+        )
+        self.in_reply_to = self._clean_message_id(parsed_headers.get("In-Reply-To", ""))
+        references_header = parsed_headers.get("References", "")
+        self.references = self._extract_message_ids(references_header)
+
+    def _clean_message_id(self, value: str) -> str:
+        ids = self._extract_message_ids(value)
+        return ids[0] if ids else (value or "").strip().strip("<>").lower()
+
+    def _extract_message_ids(self, value: str) -> List[str]:
+        if not value:
+            return []
+
+        bracketed = re.findall(r"<([^>]+)>", value)
+        if bracketed:
+            return [item.strip().lower() for item in bracketed if item.strip()]
+
+        tokens = re.split(r"\s+", value.strip())
+        return [token.strip().strip("<>").lower() for token in tokens if token.strip()]
     
     def _extract_attachments(self, msg) -> List[Dict]:
         """Extract attachment information"""
@@ -258,6 +285,8 @@ class EmailMessage:
             'cc': self.cc,
             'date': self.date.isoformat() if self.date else None,
             'message_id': self.message_id,
+            'in_reply_to': self.in_reply_to,
+            'references': self.references,
             'body': self.body,
             'analysis_body': self.analysis_body,
             'has_attachments': self.has_attachments,

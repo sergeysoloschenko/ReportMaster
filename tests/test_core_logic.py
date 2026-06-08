@@ -72,6 +72,42 @@ def test_thread_builder_splits_same_subject_with_low_participant_overlap():
     assert len(threads) == 2
 
 
+def test_thread_builder_links_messages_by_rfc_headers_before_subject_matching():
+    builder = ThreadBuilder({})
+    now = datetime.now()
+    messages = [
+        SimpleNamespace(
+            subject="Initial commercial terms",
+            sender="a@x.com",
+            recipients=["b@x.com"],
+            cc=[],
+            date=now,
+            has_attachments=False,
+            attachment_count=0,
+            message_id="root@example",
+            in_reply_to="",
+            references=[],
+        ),
+        SimpleNamespace(
+            subject="Changed topic line",
+            sender="b@x.com",
+            recipients=["a@x.com"],
+            cc=[],
+            date=now + timedelta(hours=1),
+            has_attachments=False,
+            attachment_count=0,
+            message_id="reply@example",
+            in_reply_to="root@example",
+            references=["root@example"],
+        ),
+    ]
+
+    threads = builder.build_threads(messages)
+
+    assert len(threads) == 1
+    assert threads[0].message_count == 2
+
+
 def test_attachment_folder_name_matches_report_section_format(tmp_path: Path):
     manager = AttachmentManager({})
     category = ThreadCategory("CAT_001", "Согласование ТЗ")
