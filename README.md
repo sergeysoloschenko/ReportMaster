@@ -1,6 +1,6 @@
 # ReportMaster WebApp
 
-ReportMaster processes Outlook `.msg` emails and supporting documents, deduplicates repeated content, groups threads, generates AI-based category summaries, and builds a Word monthly report with attachments.
+ReportMaster processes Outlook `.msg` emails and supporting documents, deduplicates repeated content, groups threads, generates AI-based summaries, and builds Word reports.
 
 ## Project Summary
 
@@ -9,8 +9,26 @@ ReportMaster is an internal reporting system that:
 - extracts text from readable attachments when email body context is limited
 - deduplicates repeated uploads, repeated messages, and repeated attachments before LLM analysis
 - groups messages into discussion threads
-- classifies/summarizes content with LLM APIs
+- classifies default monthly email reports into fixed business directions
+- supports custom prompt-based analysis for mixed source files
 - generates structured monthly reports for business use
+
+## Processing Modes
+
+### Monthly `.msg` report
+
+Default mode for monthly reporting. Upload Outlook `.msg` files for the reporting month. ReportMaster parses email chains, extracts relevant attachment text, removes duplicate content, and generates a report by fixed directions:
+
+1. Договор управления с гостиничным оператором Dusit
+2. Техническое сопровождение проектирования Dusit
+3. Работа с консультантами проекта
+4. Взаимодействие с Dyer
+5. Взаимодействие с Заказчиком/Инвестором
+6. Прочее
+
+### Custom analysis
+
+Prompt-based mode for arbitrary source files. Upload supported files (`.msg`, `.pdf`, `.docx`, `.xlsx`, `.txt`, `.csv`, `.md`) and enter a custom analysis/report prompt. ReportMaster extracts and deduplicates readable content, then applies the prompt to the prepared context.
 
 ## GitHub Workflow (Required)
 
@@ -104,10 +122,13 @@ docker compose up -d --build
 - Recommended workload: up to `5` concurrent users
 - No hard file-count limit in the API; processing is bounded by server disk, memory, and request upload size
 - Document text extraction is capped by `MAX_DOCUMENT_CHARS` per file before LLM analysis
+- Custom analysis is capped by `MAX_CUSTOM_SOURCES` and `MAX_CUSTOM_SOURCE_CHARS` before LLM analysis
 - LLM analysis results are cached in `CACHE_FOLDER` by content hash to avoid repeated token spend
 
 ## Security/Quality Improvements Implemented
 
+- v1.1.0: Two modes: fixed monthly `.msg` report and custom prompt-based analysis
+- v1.1.0: Fixed monthly directions for Dusit, Dyer, consultants, client/investor, and other workstreams
 - v1.1.0: Upload-level, message-level, attachment-level, and LLM-cache deduplication
 - v1.1.0: Text extraction from standalone documents and supported email attachments
 - Attachment filename sanitization and path traversal prevention

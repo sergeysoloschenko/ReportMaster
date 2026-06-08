@@ -53,7 +53,9 @@ def load_config():
 
     config.setdefault('processing', {})
     config['processing'].update({
-        'max_document_chars': int(os.getenv('MAX_DOCUMENT_CHARS', 12000))
+        'max_document_chars': int(os.getenv('MAX_DOCUMENT_CHARS', 12000)),
+        'max_custom_sources': int(os.getenv('MAX_CUSTOM_SOURCES', 80)),
+        'max_custom_source_chars': int(os.getenv('MAX_CUSTOM_SOURCE_CHARS', 5000))
     })
     
     return config

@@ -151,7 +151,7 @@ class GigaChatAPIClient:
 
         prompt = f"""Ты — профессиональный AI-аналитик и автор ежемесячных проектных отчётов в девелопменте и гостиничном строительстве.
 
-Создай структурированный отчёт по разделу **4. Работа с консультантами и операторами** на основе переписки.
+Создай структурированный отчёт по направлению **{category}** на основе переписки и документов.
 
 **ВАЖНО:** Отчёт должен быть в деловом, нейтральном стиле, совершенный вид, 3-е лицо.
 **КРИТИЧЕСКОЕ ПРАВИЛО:** НЕ указывай ФИО, имена и должности конкретных людей.
@@ -233,6 +233,65 @@ class GigaChatAPIClient:
                 "parties": organizations_text,
                 "remarks": "",
                 "recommendations": "Проверить корректность GigaChat ключа и повторить генерацию",
+            }
+
+    def run_custom_analysis(self, user_prompt: str, source_texts: List[str], title: str = "Пользовательский анализ") -> Dict:
+        combined = "\n\n--- SOURCE ---\n\n".join(text for text in source_texts if text.strip())
+        if not combined:
+            return {
+                "title": title,
+                "analysis": "Не найден читаемый текст для анализа.",
+            }
+
+        if not self.client:
+            return {
+                "title": title,
+                "analysis": "GigaChat ключ не настроен. Исходники извлечены, но пользовательский анализ не выполнен.",
+            }
+
+        cache_key = self._cache_key("custom_analysis", {
+            "user_prompt": user_prompt,
+            "source_texts": source_texts,
+            "model": self.model_summarization,
+            "max_tokens": self.max_tokens,
+        })
+        cached = self._cache_get(cache_key)
+        if cached:
+            return cached
+
+        prompt = f"""Ты — профессиональный аналитик. Выполни задачу пользователя по предоставленным исходникам.
+
+Правила:
+- Отвечай на русском языке, если пользователь явно не попросил другой язык.
+- Не выдумывай факты, которых нет в исходниках.
+- Если данных недостаточно, прямо укажи, чего не хватает.
+- Структурируй ответ как полноценный аналитический документ с заголовками.
+
+Задача пользователя:
+{user_prompt}
+
+Исходники:
+{combined[:12000]}"""
+
+        try:
+            content = self._chat_completion(
+                prompt=prompt,
+                model=self.model_summarization,
+                max_tokens=self.max_tokens,
+            )
+            result = {
+                "title": title,
+                "analysis": content.strip(),
+            }
+            self._cache_set(cache_key, result)
+            return result
+        except Exception as e:
+            self.logger.error("Error running custom analysis: %s", e)
+            if self._is_auth_error(e):
+                self.client = None
+            return {
+                "title": title,
+                "analysis": "Не удалось выполнить пользовательский анализ через LLM. Проверьте ключ и повторите запуск.",
             }
 
     def _get_access_token(self) -> str:

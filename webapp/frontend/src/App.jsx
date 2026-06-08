@@ -2,10 +2,14 @@ import { useEffect, useMemo, useState } from "react";
 import { attachmentsUrl, createJob, getJob, reportUrl } from "./api";
 
 const ACCEPTED_TYPES = ".msg,.txt,.csv,.md,.docx,.pdf,.xlsx,.xlsm";
+const MONTHLY_MODE = "monthly_msg_report";
+const CUSTOM_MODE = "custom_analysis";
 
 function App() {
+  const [mode, setMode] = useState(MONTHLY_MODE);
   const [files, setFiles] = useState([]);
   const [reportMonth, setReportMonth] = useState("");
+  const [userPrompt, setUserPrompt] = useState("");
   const [jobId, setJobId] = useState(null);
   const [job, setJob] = useState(null);
   const [error, setError] = useState("");
@@ -58,9 +62,13 @@ function App() {
       setError("Select at least one supported email or document file");
       return;
     }
+    if (mode === CUSTOM_MODE && !userPrompt.trim()) {
+      setError("Enter analysis prompt for custom mode");
+      return;
+    }
     setSubmitting(true);
     try {
-      const created = await createJob(files, reportMonth);
+      const created = await createJob(files, reportMonth, mode, userPrompt);
       setJobId(created.job_id);
       const initial = await getJob(created.job_id);
       setJob(initial);
@@ -77,18 +85,40 @@ function App() {
         <p className="eyebrow">Private Deployment</p>
         <h1>ReportMaster Web Console</h1>
         <p className="subtitle">
-          Upload Outlook `.msg` emails and documents, monitor AI processing, and download final report packages.
+          Upload monthly Outlook emails or run prompt-based analysis on mixed source files.
         </p>
       </section>
 
       <section className="grid">
         <form className="card" onSubmit={onSubmit}>
           <h2>1. Upload</h2>
+          <div className="modeSwitch" role="group" aria-label="Processing mode">
+            <button
+              type="button"
+              className={mode === MONTHLY_MODE ? "modeButton active" : "modeButton"}
+              onClick={() => {
+                setMode(MONTHLY_MODE);
+                setFiles([]);
+              }}
+            >
+              Monthly .msg report
+            </button>
+            <button
+              type="button"
+              className={mode === CUSTOM_MODE ? "modeButton active" : "modeButton"}
+              onClick={() => {
+                setMode(CUSTOM_MODE);
+                setFiles([]);
+              }}
+            >
+              Custom analysis
+            </button>
+          </div>
           <label className="field">
-            <span>Email and document files</span>
+            <span>{mode === MONTHLY_MODE ? "Monthly Outlook email files" : "Source files"}</span>
             <input
               type="file"
-              accept={ACCEPTED_TYPES}
+              accept={mode === MONTHLY_MODE ? ".msg" : ACCEPTED_TYPES}
               multiple
               onChange={onFilesSelected}
             />
@@ -102,6 +132,17 @@ function App() {
               onChange={(e) => setReportMonth(e.target.value)}
             />
           </label>
+          {mode === CUSTOM_MODE && (
+            <label className="field">
+              <span>Analysis prompt</span>
+              <textarea
+                rows="7"
+                placeholder="Describe the analysis or report you need from these files"
+                value={userPrompt}
+                onChange={(e) => setUserPrompt(e.target.value)}
+              />
+            </label>
+          )}
           <p className="meta">{files.length} file(s) selected</p>
           {!!files.length && <p className="meta">You can open picker again to add files from another folder.</p>}
           <button className="btn" disabled={submitting}>
@@ -119,6 +160,7 @@ function App() {
           {job?.error && <p className="error">{job.error}</p>}
           {job?.stats && (
             <div className="stats">
+              <p>Mode: {job.stats.mode}</p>
               <p>Total emails: {job.stats.total_messages}</p>
               <p>Uploaded files: {job.stats.uploaded_files}</p>
               <p>Unique files: {job.stats.unique_uploaded_files}</p>

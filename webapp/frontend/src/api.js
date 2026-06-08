@@ -1,9 +1,11 @@
 const API_BASE = import.meta.env.VITE_API_BASE || "";
 
-export async function createJob(files, reportMonth) {
+export async function createJob(files, reportMonth, mode, userPrompt) {
   const form = new FormData();
   files.forEach((file) => form.append("files", file));
   if (reportMonth) form.append("report_month", reportMonth);
+  form.append("mode", mode);
+  if (userPrompt) form.append("user_prompt", userPrompt);
 
   const response = await fetch(`${API_BASE}/api/jobs`, {
     method: "POST",

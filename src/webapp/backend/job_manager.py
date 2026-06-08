@@ -9,7 +9,8 @@ from pathlib import Path
 from typing import Dict, List, Optional
 from uuid import uuid4
 
-from src.analyzers.categorizer import Categorizer
+from src.analyzers.categorizer import ThreadCategory
+from src.analyzers.monthly_directions import MonthlyDirectionCategorizer
 from src.analyzers.summarizer import Summarizer
 from src.generators.attachment_manager import AttachmentManager
 from src.generators.word_generator import WordReportGenerator
@@ -21,10 +22,14 @@ from src.parsers.thread_builder import ThreadBuilder
 from src.utils.api_client import ClaudeAPIClient
 from src.utils.config_loader import load_config
 
+MONTHLY_MODE = "monthly_msg_report"
+CUSTOM_MODE = "custom_analysis"
+
 
 @dataclass
 class JobState:
     job_id: str
+    mode: str = MONTHLY_MODE
     status: str = "queued"
     progress: int = 0
     step: str = "queued"
@@ -49,9 +54,16 @@ class JobManager:
         self.lock = threading.Lock()
         self.executor = ThreadPoolExecutor(max_workers=5)
 
-    def create_job(self, files: List[bytes], filenames: List[str], report_month: Optional[str] = None) -> JobState:
+    def create_job(
+        self,
+        files: List[bytes],
+        filenames: List[str],
+        report_month: Optional[str] = None,
+        mode: str = MONTHLY_MODE,
+        user_prompt: Optional[str] = None,
+    ) -> JobState:
         job_id = uuid4().hex
-        job = JobState(job_id=job_id)
+        job = JobState(job_id=job_id, mode=mode)
 
         input_dir = Path(self.config["paths"]["temp"]) / "jobs" / job_id / "input"
         input_dir.mkdir(parents=True, exist_ok=True)
@@ -63,6 +75,7 @@ class JobManager:
             output_path.write_bytes(data)
 
         job.stats = {
+            "mode": mode,
             "uploaded_files": upload_stats.input_count,
             "unique_uploaded_files": upload_stats.unique_count,
             "duplicate_uploaded_files": upload_stats.duplicate_count,
@@ -71,7 +84,7 @@ class JobManager:
         with self.lock:
             self.jobs[job_id] = job
 
-        self.executor.submit(self._run_job, job_id, report_month)
+        self.executor.submit(self._run_job, job_id, report_month, mode, user_prompt)
         return job
 
     def get_job(self, job_id: str) -> Optional[JobState]:
@@ -110,7 +123,7 @@ class JobManager:
             if status in {"completed", "failed"}:
                 job.finished_at = datetime.utcnow().isoformat()
 
-    def _run_job(self, job_id: str, report_month: Optional[str]):
+    def _run_job(self, job_id: str, report_month: Optional[str], mode: str, user_prompt: Optional[str]):
         self._set_progress(job_id, "initializing", 1, "processing")
         try:
             config = self.config
@@ -118,7 +131,9 @@ class JobManager:
             files = [path for path in input_dir.iterdir() if path.is_file()]
             msg_files = [path for path in files if path.suffix.lower() == ".msg"]
             document_files = [path for path in files if path.suffix.lower() in SUPPORTED_DOCUMENT_EXTENSIONS]
-            if not msg_files and not document_files:
+            if mode == MONTHLY_MODE and not msg_files:
+                raise RuntimeError("Monthly report mode requires .msg files")
+            if mode == CUSTOM_MODE and not msg_files and not document_files:
                 raise RuntimeError("No supported files uploaded")
 
             document_extractor = DocumentExtractor(max_chars=config.get("processing", {}).get("max_document_chars", 12000))
@@ -126,14 +141,13 @@ class JobManager:
             document_loader = SourceDocumentLoader(document_extractor=document_extractor)
             thread_builder = ThreadBuilder(config)
             api_client = ClaudeAPIClient(config)
-            categorizer = Categorizer(config, api_client)
             summarizer = Summarizer(config, api_client)
             word_generator = WordReportGenerator(config)
             attachment_manager = AttachmentManager(config)
 
             self._set_progress(job_id, "parsing", 10)
             email_messages = parser.parse_files(msg_files)
-            document_messages = document_loader.load_files(document_files)
+            document_messages = document_loader.load_files(document_files) if mode == CUSTOM_MODE else []
             messages = [*email_messages, *document_messages]
             unique_messages, message_dedup_stats = deduplicate_messages(messages)
             if not unique_messages:
@@ -142,28 +156,57 @@ class JobManager:
             self._set_progress(job_id, "threading", 30)
             threads = thread_builder.build_threads(unique_messages)
 
-            self._set_progress(job_id, "categorization", 50)
-            categories = categorizer.categorize_threads(threads)
-
-            self._set_progress(job_id, "summarization", 70)
-            summaries = summarizer.summarize_categories(categories)
-
             output_dir = Path(config["paths"]["output"]) / "jobs" / job_id
             output_dir.mkdir(parents=True, exist_ok=True)
-            report_filename = f"Monthly_Report_{datetime.now().strftime('%Y_%m_%d_%H%M')}.docx"
-            report_path = output_dir / report_filename
 
-            self._set_progress(job_id, "report_generation", 85)
-            word_generator.generate_report(
-                summaries=summaries,
-                output_path=report_path,
-                report_month=report_month or datetime.now().strftime("%B %Y"),
-            )
+            if mode == MONTHLY_MODE:
+                self._set_progress(job_id, "direction_classification", 50)
+                categories = MonthlyDirectionCategorizer().categorize_threads(threads)
 
-            self._set_progress(job_id, "attachments", 95)
-            att_stats = attachment_manager.save_attachments(categories, output_dir)
+                self._set_progress(job_id, "summarization", 70)
+                summaries = summarizer.summarize_categories(categories)
+
+                report_filename = f"Monthly_Report_{datetime.now().strftime('%Y_%m_%d_%H%M')}.docx"
+                report_path = output_dir / report_filename
+
+                self._set_progress(job_id, "report_generation", 85)
+                word_generator.generate_report(
+                    summaries=summaries,
+                    output_path=report_path,
+                    report_month=report_month or datetime.now().strftime("%B %Y"),
+                )
+
+                self._set_progress(job_id, "attachments", 95)
+                att_stats = attachment_manager.save_attachments(categories, output_dir)
+                total_categories = len(categories)
+            else:
+                self._set_progress(job_id, "custom_analysis", 70)
+                source_texts = self._collect_source_texts(unique_messages)
+                analysis = api_client.run_custom_analysis(
+                    user_prompt=(user_prompt or "").strip(),
+                    source_texts=source_texts,
+                    title="Пользовательский анализ",
+                )
+
+                report_filename = f"Custom_Analysis_{datetime.now().strftime('%Y_%m_%d_%H%M')}.docx"
+                report_path = output_dir / report_filename
+
+                self._set_progress(job_id, "report_generation", 85)
+                word_generator.generate_custom_report(
+                    analysis=analysis,
+                    output_path=report_path,
+                    report_month=report_month,
+                )
+
+                self._set_progress(job_id, "attachments", 95)
+                custom_category = ThreadCategory("CUSTOM", "Исходные вложения", "Вложения из исходных писем")
+                for thread in threads:
+                    custom_category.add_thread(thread)
+                att_stats = attachment_manager.save_attachments([custom_category], output_dir)
+                total_categories = 0
 
             stats = {
+                "mode": mode,
                 "uploaded_files": self.get_job(job_id).stats.get("uploaded_files", 0),
                 "unique_uploaded_files": self.get_job(job_id).stats.get("unique_uploaded_files", 0),
                 "duplicate_uploaded_files": self.get_job(job_id).stats.get("duplicate_uploaded_files", 0),
@@ -172,7 +215,7 @@ class JobManager:
                 "total_messages": len(unique_messages),
                 "duplicate_messages": message_dedup_stats.duplicate_count,
                 "total_threads": len(threads),
-                "total_categories": len(categories),
+                "total_categories": total_categories,
                 "total_attachments": att_stats["total_attachments"],
                 "unique_attachments": att_stats.get("unique_attachments", att_stats["total_attachments"]),
                 "duplicate_attachments": att_stats.get("duplicate_attachments", 0),
@@ -210,3 +253,24 @@ class JobManager:
         stem = output_path.stem
         suffix = output_path.suffix
         return input_dir / f"{stem}_{file_hash[:12]}{suffix}"
+
+    def _collect_source_texts(self, messages) -> List[str]:
+        source_texts = []
+        seen = set()
+        max_sources = self.config.get("processing", {}).get("max_custom_sources", 80)
+        max_chars = self.config.get("processing", {}).get("max_custom_source_chars", 5000)
+
+        for message in messages:
+            text = (getattr(message, "analysis_body", None) or getattr(message, "body", "") or "").strip()
+            if not text:
+                continue
+            text_key = getattr(message, "normalized_body_hash", "") or text[:200]
+            if text_key in seen:
+                continue
+            seen.add(text_key)
+            title = getattr(message, "subject", None) or Path(getattr(message, "file_path", "")).name
+            source_texts.append(f"[{title}]\n{text[:max_chars]}")
+            if len(source_texts) >= max_sources:
+                break
+
+        return source_texts

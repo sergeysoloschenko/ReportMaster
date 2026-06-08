@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 from src.analyzers.categorizer import Categorizer
 from src.analyzers.categorizer import ThreadCategory
+from src.analyzers.monthly_directions import MonthlyDirectionCategorizer
 from src.generators.attachment_manager import AttachmentManager
 from src.processors.deduplicator import deduplicate_messages, deduplicate_uploads
 from src.processors.document_extractor import DocumentExtractor
@@ -121,10 +122,39 @@ def test_attachment_folder_name_matches_report_section_format(tmp_path: Path):
 
     stats = manager.save_attachments([category], tmp_path)
 
-    folder = tmp_path / "Attachments" / "4.1_Согласование ТЗ"
+    folder = tmp_path / "Attachments" / "1_Согласование ТЗ"
     assert folder.exists()
     assert (folder / "spec.pdf").exists()
     assert stats["total_attachments"] == 1
+
+
+def test_monthly_direction_categorizer_uses_fixed_directions():
+    now = datetime.now()
+    message = SimpleNamespace(
+        subject="Dyer design comments",
+        body="Dyer sent updated comments",
+        analysis_body="Dyer sent updated comments",
+        sender="lead@dyergroup.ru",
+        recipients=["pm@example.com"],
+        cc=[],
+        date=now,
+        has_attachments=False,
+        attachment_count=0,
+        attachments=[],
+    )
+    thread = SimpleNamespace(
+        subject="Dyer design comments",
+        messages=[message],
+        participants={"lead@dyergroup.ru", "pm@example.com"},
+        message_count=1,
+        total_attachments=0,
+    )
+
+    categories = MonthlyDirectionCategorizer().categorize_threads([thread])
+
+    assert len(categories) == 6
+    dyer_category = next(category for category in categories if category.name == "Взаимодействие с Dyer")
+    assert dyer_category.thread_count == 1
 
 
 def test_deduplicate_uploads_skips_identical_file_bytes():

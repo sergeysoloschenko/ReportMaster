@@ -99,7 +99,8 @@ h2 {
 }
 
 input[type="text"],
-input[type="file"] {
+input[type="file"],
+textarea {
   width: 100%;
   border: 1px solid var(--border);
   border-radius: 14px;
@@ -107,6 +108,40 @@ input[type="file"] {
   background: #0f1620;
   color: var(--text);
   font-size: 17px;
+}
+
+textarea {
+  min-height: 150px;
+  resize: vertical;
+  line-height: 1.45;
+}
+
+.modeSwitch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 18px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: #0f1620;
+}
+
+.modeButton {
+  border: 1px solid transparent;
+  border-radius: 10px;
+  padding: 12px 10px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.modeButton.active {
+  background: #203249;
+  border-color: #39526f;
+  color: var(--text);
 }
 
 .btn {

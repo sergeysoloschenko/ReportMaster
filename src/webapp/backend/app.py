@@ -14,6 +14,9 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="ReportMaster API", version="1.1.0")
 job_manager = JobManager()
 SUPPORTED_UPLOAD_EXTENSIONS = {".msg", *SUPPORTED_DOCUMENT_EXTENSIONS}
+MONTHLY_MODE = "monthly_msg_report"
+CUSTOM_MODE = "custom_analysis"
+SUPPORTED_MODES = {MONTHLY_MODE, CUSTOM_MODE}
 
 app.add_middleware(
     CORSMiddleware,
@@ -33,14 +36,23 @@ def health():
 async def create_job(
     files: List[UploadFile] = File(...),
     report_month: Optional[str] = Form(default=None),
+    mode: str = Form(default=MONTHLY_MODE),
+    user_prompt: Optional[str] = Form(default=None),
 ):
+    if mode not in SUPPORTED_MODES:
+        raise HTTPException(status_code=400, detail=f"Unsupported mode: {mode}")
+
+    allowed_extensions = {".msg"} if mode == MONTHLY_MODE else SUPPORTED_UPLOAD_EXTENSIONS
     supported_files = [
         f for f in files
-        if f.filename and Path(f.filename).suffix.lower() in SUPPORTED_UPLOAD_EXTENSIONS
+        if f.filename and Path(f.filename).suffix.lower() in allowed_extensions
     ]
     if not supported_files:
-        allowed = ", ".join(sorted(SUPPORTED_UPLOAD_EXTENSIONS))
+        allowed = ", ".join(sorted(allowed_extensions))
         raise HTTPException(status_code=400, detail=f"Upload at least one supported file: {allowed}")
+
+    if mode == CUSTOM_MODE and not (user_prompt or "").strip():
+        raise HTTPException(status_code=400, detail="Custom analysis prompt is required")
 
     payloads = []
     names = []
@@ -48,7 +60,13 @@ async def create_job(
         payloads.append(await file.read())
         names.append(Path(file.filename).name)
 
-    job = job_manager.create_job(payloads, names, report_month=report_month)
+    job = job_manager.create_job(
+        payloads,
+        names,
+        report_month=report_month,
+        mode=mode,
+        user_prompt=user_prompt,
+    )
     return {"job_id": job.job_id, "status": job.status}
 
 
@@ -59,6 +77,7 @@ def get_job(job_id: str):
         raise HTTPException(status_code=404, detail="Job not found")
     return {
         "job_id": job.job_id,
+        "mode": job.mode,
         "status": job.status,
         "progress": job.progress,
         "step": job.step,

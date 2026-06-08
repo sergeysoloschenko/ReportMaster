@@ -6,6 +6,8 @@ app:
 
 processing:
   max_document_chars: 12000
+  max_custom_sources: 80
+  max_custom_source_chars: 5000
   deduplicate_uploads: true
   deduplicate_messages: true
 

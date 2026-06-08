@@ -50,6 +50,20 @@ class Summarizer:
     
     def _summarize_category(self, category: ThreadCategory) -> dict:
         """Generate structured summary for a single category"""
+        if category.total_messages == 0:
+            return {
+                'category_name': category.name,
+                'date_range': 'Н/Д',
+                'participants': [],
+                'message_count': 0,
+                'attachment_count': 0,
+                'context': category.description,
+                'actions': [],
+                'result': 'Активность за период не выявлена.',
+                'parties': '',
+                'remarks': '',
+                'recommendations': ''
+            }
         
         # Collect all messages from threads in this category
         all_messages = []

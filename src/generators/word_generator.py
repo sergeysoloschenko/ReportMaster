@@ -19,7 +19,7 @@ class WordReportGenerator:
     # Russian translations
     TRANSLATIONS_RU = {
         'title': 'Ежемесячный отчет',
-        'section_title': '4. Работа с консультантами и операторами',
+        'section_title': 'Основные направления работы',
         'generated': 'Создано',
         'context': 'Контекст:',
         'actions': 'Действия:',
@@ -65,8 +65,8 @@ class WordReportGenerator:
         # Add header
         self._add_header(doc, report_month)
         
-        # Add section 4 with subsections in investor-style table
-        self._add_section_4_table(doc, summaries)
+        # Add monthly directions in investor-style table
+        self._add_monthly_directions_table(doc, summaries)
         
         # Add statistics
         self._add_statistics(doc, summaries)
@@ -77,6 +77,36 @@ class WordReportGenerator:
         
         self.logger.info(f"✓ Report saved: {output_path}")
         
+        return output_path
+
+    def generate_custom_report(self, analysis: Dict, output_path: Path, report_month: str = None) -> Path:
+        """Generate a free-form analysis/report document."""
+        self.logger.info(f"Generating custom analysis report: {output_path}")
+
+        doc = Document()
+        style = doc.styles['Normal']
+        font = style.font
+        font.name = self.font
+        font.size = Pt(self.font_size)
+
+        title = doc.add_paragraph()
+        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        run = title.add_run(analysis.get("title") or "Пользовательский анализ")
+        run.bold = True
+        run.font.size = Pt(18)
+        run.font.color.rgb = RGBColor(68, 114, 196)
+
+        if report_month:
+            subtitle = doc.add_paragraph()
+            subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            subtitle.add_run(report_month).font.size = Pt(12)
+
+        doc.add_paragraph()
+        self._add_plain_text(doc, analysis.get("analysis", ""))
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        doc.save(str(output_path))
+        self.logger.info(f"✓ Custom report saved: {output_path}")
         return output_path
     
     def _add_header(self, doc, report_month: str = None):
@@ -114,10 +144,10 @@ class WordReportGenerator:
         # Add spacing
         doc.add_paragraph()
     
-    def _add_section_4_table(self, doc, summaries: Dict):
+    def _add_monthly_directions_table(self, doc, summaries: Dict):
         """
-        Add section in investor-style table:
-        col1 = № (4 / 4.1 / 4.2 ...)
+        Add monthly report directions in investor-style table:
+        col1 = № (1 / 2 / 3 ...)
         col2 = content and result
         col3 = period/date
         """
@@ -129,17 +159,17 @@ class WordReportGenerator:
         table.columns[1].width = Inches(7.0)
         table.columns[2].width = Inches(1.8)
 
-        # Row "4"
+        # Header row
         header_cells = table.rows[0].cells
-        header_cells[0].text = "4"
-        header_cells[1].text = "Работа с консультантами и операторами в рамках реализации проекта."
-        header_cells[2].text = ""
+        header_cells[0].text = "№"
+        header_cells[1].text = self.TRANSLATIONS_RU['section_title']
+        header_cells[2].text = "Период"
         self._format_row(header_cells, is_header=True)
 
-        # Rows "4.1", "4.2", ...
+        # Direction rows
         for idx, (_, summary_data) in enumerate(summaries.items(), 1):
             row_cells = table.add_row().cells
-            row_cells[0].text = f"4.{idx}"
+            row_cells[0].text = str(idx)
             row_cells[1].text = self._build_investor_cell_text(summary_data)
             row_cells[2].text = summary_data.get("date_range", "")
             self._format_row(row_cells, is_header=False)
@@ -148,12 +178,18 @@ class WordReportGenerator:
         """Build concise narrative like in investor sample."""
         actions = summary_data.get("actions", []) or []
         actions_text = " ".join(a.strip() for a in actions if a and a.strip())
-        if not actions_text:
+        if not actions_text and summary_data.get("message_count", 0) == 0:
+            actions_text = "Активность по направлению за отчетный период не выявлена."
+        elif not actions_text:
             actions_text = "Проведена рабочая переписка по профильному вопросу."
 
         result = (summary_data.get("result") or "").strip()
         if not result:
             result = "Статус уточняется."
+
+        category_name = (summary_data.get("category_name") or "").strip()
+        if category_name:
+            actions_text = f"{category_name}\n\n{actions_text}"
 
         # Keep text concise for table layout.
         actions_text = actions_text[:900].rstrip()
@@ -192,6 +228,22 @@ class WordReportGenerator:
         doc.add_paragraph(f"• {self.TRANSLATIONS_RU['total_categories']}: {len(summaries)}")
         doc.add_paragraph(f"• {self.TRANSLATIONS_RU['total_messages']}: {total_messages}")
         doc.add_paragraph(f"• {self.TRANSLATIONS_RU['total_attachments']}: {total_attachments}")
+
+    def _add_plain_text(self, doc, text: str):
+        """Add plain/markdown-like text as readable Word paragraphs."""
+        for raw_line in (text or "").splitlines():
+            line = raw_line.strip()
+            if not line:
+                doc.add_paragraph()
+                continue
+            paragraph = doc.add_paragraph()
+            if line.startswith("#"):
+                line = line.lstrip("#").strip()
+                run = paragraph.add_run(line)
+                run.bold = True
+                run.font.size = Pt(14)
+            else:
+                paragraph.add_run(line)
 
 
 if __name__ == "__main__":
