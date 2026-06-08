@@ -6,7 +6,7 @@ from src.analyzers.categorizer import Categorizer
 from src.analyzers.categorizer import ThreadCategory
 from src.analyzers.monthly_directions import MonthlyDirectionCategorizer
 from src.generators.attachment_manager import AttachmentManager
-from src.processors.deduplicator import deduplicate_messages, deduplicate_uploads
+from src.processors.deduplicator import deduplicate_messages, deduplicate_upload_paths, deduplicate_uploads
 from src.processors.document_extractor import DocumentExtractor
 from src.processors.source_document import SourceDocumentLoader
 from src.parsers.thread_builder import ThreadBuilder
@@ -165,6 +165,27 @@ def test_deduplicate_uploads_skips_identical_file_bytes():
     ])
 
     assert len(unique) == 2
+    assert stats.input_count == 3
+    assert stats.unique_count == 2
+    assert stats.duplicate_count == 1
+    assert stats.duplicate_names == ["copy.msg"]
+
+
+def test_deduplicate_upload_paths_skips_identical_files(tmp_path: Path):
+    one = tmp_path / "one.msg"
+    copy = tmp_path / "copy.msg"
+    other = tmp_path / "other.msg"
+    one.write_bytes(b"same")
+    copy.write_bytes(b"same")
+    other.write_bytes(b"different")
+
+    unique, stats = deduplicate_upload_paths([
+        ("one.msg", one),
+        ("copy.msg", copy),
+        ("other.msg", other),
+    ])
+
+    assert [name for name, _, _ in unique] == ["one.msg", "other.msg"]
     assert stats.input_count == 3
     assert stats.unique_count == 2
     assert stats.duplicate_count == 1

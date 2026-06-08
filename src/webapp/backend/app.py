@@ -1,6 +1,8 @@
 import logging
+import shutil
 from pathlib import Path
 from typing import List, Optional
+from uuid import uuid4
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,6 +19,7 @@ SUPPORTED_UPLOAD_EXTENSIONS = {".msg", *SUPPORTED_DOCUMENT_EXTENSIONS}
 MONTHLY_MODE = "monthly_msg_report"
 CUSTOM_MODE = "custom_analysis"
 SUPPORTED_MODES = {MONTHLY_MODE, CUSTOM_MODE}
+UPLOAD_CHUNK_SIZE = 1024 * 1024
 
 app.add_middleware(
     CORSMiddleware,
@@ -54,19 +57,31 @@ async def create_job(
     if mode == CUSTOM_MODE and not (user_prompt or "").strip():
         raise HTTPException(status_code=400, detail="Custom analysis prompt is required")
 
-    payloads = []
+    staging_dir = Path(job_manager.config["paths"]["temp"]) / "uploads" / uuid4().hex
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    upload_paths = []
     names = []
-    for file in supported_files:
-        payloads.append(await file.read())
-        names.append(Path(file.filename).name)
 
-    job = job_manager.create_job(
-        payloads,
-        names,
-        report_month=report_month,
-        mode=mode,
-        user_prompt=user_prompt,
-    )
+    try:
+        for index, file in enumerate(supported_files):
+            original_name = Path(file.filename).name
+            staged_path = staging_dir / f"{index:05d}_{original_name}"
+            with staged_path.open("wb") as handle:
+                while chunk := await file.read(UPLOAD_CHUNK_SIZE):
+                    handle.write(chunk)
+            upload_paths.append(staged_path)
+            names.append(original_name)
+
+        job = job_manager.create_job_from_paths(
+            upload_paths,
+            names,
+            report_month=report_month,
+            mode=mode,
+            user_prompt=user_prompt,
+        )
+    finally:
+        shutil.rmtree(staging_dir, ignore_errors=True)
+
     return {"job_id": job.job_id, "status": job.status}
 
 

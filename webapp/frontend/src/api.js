@@ -12,8 +12,15 @@ export async function createJob(files, reportMonth, mode, userPrompt) {
     body: form
   });
   if (!response.ok) {
-    const payload = await response.json().catch(() => ({}));
-    throw new Error(payload.detail || "Failed to start job");
+    const contentType = response.headers.get("content-type") || "";
+    const payload = contentType.includes("application/json")
+      ? await response.json().catch(() => ({}))
+      : {};
+    const text = payload.detail || response.statusText || "Failed to start job";
+    if (response.status === 413) {
+      throw new Error("Upload is too large for the current server/proxy limit");
+    }
+    throw new Error(text);
   }
   return response.json();
 }

@@ -1,5 +1,6 @@
 import io
 import logging
+import shutil
 import threading
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
@@ -14,7 +15,7 @@ from src.analyzers.monthly_directions import MonthlyDirectionCategorizer
 from src.analyzers.summarizer import Summarizer
 from src.generators.attachment_manager import AttachmentManager
 from src.generators.word_generator import WordReportGenerator
-from src.processors.deduplicator import deduplicate_messages, deduplicate_uploads
+from src.processors.deduplicator import deduplicate_messages, deduplicate_upload_paths, deduplicate_uploads
 from src.processors.document_extractor import DocumentExtractor, SUPPORTED_DOCUMENT_EXTENSIONS
 from src.processors.source_document import SourceDocumentLoader
 from src.parsers.msg_parser import MSGParser
@@ -73,6 +74,39 @@ class JobManager:
             safe_name = Path(filename).name
             output_path = self._unique_input_path(input_dir, safe_name, file_hash)
             output_path.write_bytes(data)
+
+        job.stats = {
+            "mode": mode,
+            "uploaded_files": upload_stats.input_count,
+            "unique_uploaded_files": upload_stats.unique_count,
+            "duplicate_uploaded_files": upload_stats.duplicate_count,
+        }
+
+        with self.lock:
+            self.jobs[job_id] = job
+
+        self.executor.submit(self._run_job, job_id, report_month, mode, user_prompt)
+        return job
+
+    def create_job_from_paths(
+        self,
+        files: List[Path],
+        filenames: List[str],
+        report_month: Optional[str] = None,
+        mode: str = MONTHLY_MODE,
+        user_prompt: Optional[str] = None,
+    ) -> JobState:
+        job_id = uuid4().hex
+        job = JobState(job_id=job_id, mode=mode)
+
+        input_dir = Path(self.config["paths"]["temp"]) / "jobs" / job_id / "input"
+        input_dir.mkdir(parents=True, exist_ok=True)
+
+        unique_uploads, upload_stats = deduplicate_upload_paths(zip(filenames, files))
+        for filename, path, file_hash in unique_uploads:
+            safe_name = Path(filename).name
+            output_path = self._unique_input_path(input_dir, safe_name, file_hash)
+            shutil.move(str(path), output_path)
 
         job.stats = {
             "mode": mode,

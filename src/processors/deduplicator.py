@@ -24,6 +24,14 @@ def hash_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def hash_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(chunk_size):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def normalize_text_for_hash(text: str) -> str:
     text = (text or "").lower()
     text = re.sub(r"\s+", " ", text)
@@ -61,6 +69,25 @@ def deduplicate_uploads(files: Iterable[Tuple[str, bytes]]) -> Tuple[List[Tuple[
             continue
         seen.add(file_hash)
         unique.append((filename, data, file_hash))
+
+    stats.unique_count = len(unique)
+    return unique, stats
+
+
+def deduplicate_upload_paths(files: Iterable[Tuple[str, Path]]) -> Tuple[List[Tuple[str, Path, str]], DeduplicationStats]:
+    seen = set()
+    unique = []
+    stats = DeduplicationStats()
+
+    for filename, path in files:
+        stats.input_count += 1
+        file_hash = hash_file(path)
+        if file_hash in seen:
+            stats.duplicate_count += 1
+            stats.duplicate_names.append(Path(filename).name)
+            continue
+        seen.add(file_hash)
+        unique.append((filename, path, file_hash))
 
     stats.unique_count = len(unique)
     return unique, stats
