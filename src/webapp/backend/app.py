@@ -160,6 +160,7 @@ def get_job(job_id: str, _: bool = Depends(require_auth)):
         "created_at": job.created_at,
         "finished_at": job.finished_at,
         "stats": job.stats,
+        "logs": job.logs,
     }
 
 

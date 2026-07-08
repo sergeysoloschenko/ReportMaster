@@ -7,6 +7,7 @@ import logging
 import re
 import shutil
 import subprocess
+import threading
 import time
 import hashlib
 from typing import Dict, List, Optional
@@ -736,6 +737,7 @@ class CodexCLIClient(GigaChatAPIClient):
         self.sandbox = api_cfg.get("codex_sandbox", "read-only")
         self.max_prompt_chars = api_cfg.get("codex_max_prompt_chars", 90000)
         self.workdir = Path(api_cfg.get("codex_workdir") or Path(__file__).resolve().parents[2])
+        self.log_callback = config.get("runtime", {}).get("log_callback")
 
         self._usage = {
             "prompt_tokens": 0,
@@ -788,16 +790,9 @@ class CodexCLIClient(GigaChatAPIClient):
             command.extend(["--model", model])
         command.append("-")
 
+        self._emit_log("Starting Codex CLI analysis", "codex")
         try:
-            completed = subprocess.run(
-                command,
-                input=worker_prompt,
-                text=True,
-                capture_output=True,
-                cwd=self.workdir,
-                timeout=self.timeout_seconds,
-                check=False,
-            )
+            completed = self._run_codex_command(command, worker_prompt)
         except subprocess.TimeoutExpired as exc:
             raise RuntimeError(f"Codex CLI timed out after {self.timeout_seconds} seconds") from exc
 
@@ -823,7 +818,69 @@ class CodexCLIClient(GigaChatAPIClient):
             raise RuntimeError("Codex CLI returned an empty response")
 
         self._usage["output_chars"] += len(content)
+        self._emit_log("Codex CLI analysis completed", "codex")
         return content
+
+    def _run_codex_command(self, command: List[str], prompt: str):
+        process = subprocess.Popen(
+            command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            cwd=self.workdir,
+            bufsize=1,
+        )
+        stdout_lines: List[str] = []
+        stderr_lines: List[str] = []
+
+        def reader(stream, collector: List[str], source: str):
+            try:
+                for line in iter(stream.readline, ""):
+                    collector.append(line)
+                    self._emit_log(line, source)
+            finally:
+                stream.close()
+
+        threads = [
+            threading.Thread(target=reader, args=(process.stdout, stdout_lines, "codex"), daemon=True),
+            threading.Thread(target=reader, args=(process.stderr, stderr_lines, "codex"), daemon=True),
+        ]
+        for thread in threads:
+            thread.start()
+
+        assert process.stdin is not None
+        process.stdin.write(prompt)
+        process.stdin.close()
+
+        try:
+            returncode = process.wait(timeout=self.timeout_seconds)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            for thread in threads:
+                thread.join(timeout=2)
+            raise
+
+        for thread in threads:
+            thread.join(timeout=2)
+
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=returncode,
+            stdout="".join(stdout_lines),
+            stderr="".join(stderr_lines),
+        )
+
+    def _emit_log(self, message: str, source: str = "codex") -> None:
+        if not self.log_callback:
+            return
+        clean = re.sub(r"\x1b\[[0-9;]*m", "", str(message or "")).strip()
+        if not clean:
+            return
+        try:
+            self.log_callback(clean, source)
+        except Exception:
+            self.logger.debug("Codex log callback failed", exc_info=True)
 
     def _worker_prompt(self, prompt: str) -> str:
         return f"""You are the private ReportMaster analysis worker.

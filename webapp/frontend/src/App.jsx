@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { attachmentsUrl, createJob, getAuthStatus, getJob, login, logout, reportUrl } from "./api";
 
 const ACCEPTED_TYPES = ".msg,.txt,.csv,.md,.docx,.pdf,.xlsx,.xlsm";
@@ -14,10 +14,12 @@ function App() {
   const [job, setJob] = useState(null);
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
   const [authChecked, setAuthChecked] = useState(false);
   const [authenticated, setAuthenticated] = useState(false);
   const [password, setPassword] = useState("");
   const [authError, setAuthError] = useState("");
+  const logEndRef = useRef(null);
 
   const isProcessing = job && !["completed", "failed"].includes(job.status);
 
@@ -61,6 +63,12 @@ function App() {
     return `${job.step} (${job.progress}%)`;
   }, [job]);
 
+  const logs = job?.logs || [];
+
+  useEffect(() => {
+    logEndRef.current?.scrollIntoView({ block: "end" });
+  }, [logs.length]);
+
   function mergeFiles(nextFiles) {
     setFiles((prev) => {
       const byKey = new Map(prev.map((f) => [`${f.name}:${f.size}:${f.lastModified}`, f]));
@@ -91,8 +99,9 @@ function App() {
       return;
     }
     setSubmitting(true);
+    setUploadProgress(0);
     try {
-      const created = await createJob(files, reportMonth, mode, userPrompt);
+      const created = await createJob(files, reportMonth, mode, userPrompt, setUploadProgress);
       setJobId(created.job_id);
       const initial = await getJob(created.job_id);
       setJob(initial);
@@ -231,8 +240,13 @@ function App() {
           <p className="meta">{files.length} file(s) selected</p>
           {!!files.length && <p className="meta">You can open picker again to add files from another folder.</p>}
           <button className="btn" disabled={submitting}>
-            {submitting ? "Starting..." : "Start Processing"}
+            {submitting ? `Uploading... ${uploadProgress || 0}%` : "Start Processing"}
           </button>
+          {submitting && (
+            <p className="meta">
+              Uploading files and creating the processing job. Progress details appear after the job is accepted.
+            </p>
+          )}
           {error && <p className="error">{error}</p>}
         </form>
 
@@ -278,6 +292,25 @@ function App() {
               </a>
             </div>
           )}
+          <div className="logPanel">
+            <div className="logHeader">
+              <h3>Live log</h3>
+              <span>{logs.length} event(s)</span>
+            </div>
+            <div className="logStream">
+              {logs.length ? (
+                logs.map((item, index) => (
+                  <div className={`logLine ${item.source || "system"}`} key={`${item.time}-${index}`}>
+                    <span className="logSource">{item.source || "system"}</span>
+                    <span className="logMessage">{item.message}</span>
+                  </div>
+                ))
+              ) : (
+                <p className="meta">No processing events yet.</p>
+              )}
+              <div ref={logEndRef} />
+            </div>
+          </div>
         </section>
       </section>
     </main>

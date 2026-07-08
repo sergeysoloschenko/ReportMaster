@@ -1,4 +1,5 @@
 import io
+import copy
 import logging
 import shutil
 import threading
@@ -41,6 +42,7 @@ class JobState:
     report_path: Optional[str] = None
     attachments_path: Optional[str] = None
     stats: Dict = field(default_factory=dict)
+    logs: List[Dict[str, str]] = field(default_factory=list)
 
 
 class JobManager:
@@ -127,6 +129,24 @@ class JobManager:
         with self.lock:
             return self.jobs.get(job_id)
 
+    def append_log(self, job_id: str, message: str, source: str = "system"):
+        clean_message = str(message or "").strip()
+        if not clean_message:
+            return
+        with self.lock:
+            job = self.jobs.get(job_id)
+            if not job:
+                return
+            job.logs.append(
+                {
+                    "time": datetime.utcnow().isoformat(),
+                    "source": source,
+                    "message": clean_message[-2000:],
+                }
+            )
+            if len(job.logs) > 300:
+                job.logs = job.logs[-300:]
+
     def get_report_path(self, job_id: str) -> Optional[Path]:
         job = self.get_job(job_id)
         if not job or not job.report_path:
@@ -158,11 +178,15 @@ class JobManager:
             job.error = error
             if status in {"completed", "failed"}:
                 job.finished_at = datetime.utcnow().isoformat()
+        self.append_log(job_id, f"{step}: {progress}%", "progress")
 
     def _run_job(self, job_id: str, report_month: Optional[str], mode: str, user_prompt: Optional[str]):
         self._set_progress(job_id, "initializing", 1, "processing")
         try:
-            config = self.config
+            config = copy.deepcopy(self.config)
+            config["runtime"] = {
+                "log_callback": lambda message, source="codex": self.append_log(job_id, message, source)
+            }
             input_dir = Path(config["paths"]["temp"]) / "jobs" / job_id / "input"
             files = [path for path in input_dir.iterdir() if path.is_file()]
             msg_files = [path for path in files if path.suffix.lower() == ".msg"]
@@ -183,6 +207,7 @@ class JobManager:
             attachment_manager = AttachmentManager(config)
 
             self._set_progress(job_id, "parsing", 10)
+            self.append_log(job_id, f"Received {len(files)} uploaded file(s)", "system")
             email_messages = parser.parse_files(msg_files)
             document_messages = document_loader.load_files(document_files) if mode == CUSTOM_MODE else []
             messages = [*email_messages, *document_messages]
@@ -191,19 +216,24 @@ class JobManager:
                 raise RuntimeError("No readable unique content found in uploaded files")
 
             self._set_progress(job_id, "threading", 30)
+            self.append_log(job_id, f"Parsed {len(unique_messages)} unique source item(s)", "system")
             threads = thread_builder.build_threads(unique_messages)
+            self.append_log(job_id, f"Built {len(threads)} thread(s)", "system")
 
             output_dir = Path(config["paths"]["output"]) / "jobs" / job_id
             output_dir.mkdir(parents=True, exist_ok=True)
 
             if mode == MONTHLY_MODE:
                 self._set_progress(job_id, "thread_insights", 45)
+                self.append_log(job_id, "Starting Codex thread insight analysis", "system")
                 insights = insight_analyzer.analyze_threads(threads)
 
                 self._set_progress(job_id, "direction_classification", 60)
+                self.append_log(job_id, "Classifying thread insights into report directions", "system")
                 categories = MonthlyDirectionCategorizer().categorize_insights(insights)
 
                 self._set_progress(job_id, "direction_summarization", 75)
+                self.append_log(job_id, "Starting Codex direction summarization", "system")
                 summaries = summarizer.summarize_monthly_categories_from_insights(categories)
 
                 report_filename = f"Monthly_Report_{datetime.now().strftime('%Y_%m_%d_%H%M')}.docx"
@@ -222,6 +252,7 @@ class JobManager:
                 total_insights = len(insights)
             else:
                 self._set_progress(job_id, "custom_analysis", 70)
+                self.append_log(job_id, "Starting Codex custom analysis", "system")
                 source_texts = self._collect_source_texts(unique_messages)
                 analysis = api_client.run_custom_analysis(
                     user_prompt=(user_prompt or "").strip(),
@@ -285,9 +316,11 @@ class JobManager:
                 job.stats = stats
 
             self._set_progress(job_id, "completed", 100, status="completed")
+            self.append_log(job_id, "Report generation completed", "system")
 
         except Exception as exc:
             self.logger.exception("Job %s failed", job_id)
+            self.append_log(job_id, str(exc), "error")
             self._set_progress(job_id, "failed", 100, status="failed", error=str(exc))
 
     def _unique_input_path(self, input_dir: Path, filename: str, file_hash: str) -> Path:
