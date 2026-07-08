@@ -1,6 +1,6 @@
 # ReportMaster WebApp
 
-ReportMaster processes Outlook `.msg` emails and supporting documents, deduplicates repeated content, groups threads, generates AI-based summaries, and builds Word reports.
+ReportMaster processes Outlook `.msg` emails and supporting documents, deduplicates repeated content, groups threads, generates Codex-based summaries, and builds Word reports.
 
 ## Project Summary
 
@@ -11,6 +11,7 @@ ReportMaster is an internal reporting system that:
 - groups messages into discussion threads
 - classifies default monthly email reports into fixed business directions
 - supports custom prompt-based analysis for mixed source files
+- runs analysis through a private Codex CLI worker
 - generates structured monthly reports for business use
 
 ## Processing Modes
@@ -96,34 +97,50 @@ Backend API: `http://localhost:8000`
 cp .env.example .env
 ```
 
-2. Set GigaChat credentials in `.env`:
+2. Set private access and Codex worker settings in `.env`:
 
 ```bash
-GIGACHAT_AUTH_KEY=<base64(client_id:client_secret)>
-GIGACHAT_SCOPE=GIGACHAT_API_PERS
-GIGACHAT_VERIFY_SSL=true
-GIGACHAT_MODEL_CATEGORIZATION=GigaChat-2
-GIGACHAT_MODEL_SUMMARIZATION=GigaChat-2-Max
+APP_PASSWORD=<strong-private-password>
+APP_ALLOWED_ORIGINS=http://<server-ip>:8080
+APP_COOKIE_SECURE=false
+
+LLM_PROVIDER=codex
+CODEX_COMMAND=codex
+CODEX_SANDBOX_MODE=read-only
+CODEX_TIMEOUT_SECONDS=1200
+CODEX_MAX_PROMPT_CHARS=90000
+CODEX_WORKDIR=/app
+JOB_MAX_WORKERS=1
 ```
 
-Access token is requested automatically via OAuth (`/api/v2/oauth`) and refreshed by the backend.
-3. Run:
+3. Build and start containers:
 
 ```bash
 docker compose up -d --build
 ```
 
-4. Open:
+4. Sign in Codex inside the backend container once:
+
+```bash
+docker compose exec backend codex login --device-auth
+```
+
+Follow the printed browser URL and enter the device code with your ChatGPT Pro account. The login cache is stored in the mounted `./.codex` folder and survives container rebuilds. Treat this folder like a secret.
+
+5. Open:
 - Web UI: `http://<server-ip>:8080`
 - API health: `http://<server-ip>:8000/api/health`
 
+The web UI asks for `APP_PASSWORD` before uploads, job status, reports, or attachments are accessible. Without a domain, keep `APP_COOKIE_SECURE=false`; switch it to `true` only after HTTPS is configured.
+
 ## Limits and Operational Profile
 
-- Recommended workload: up to `5` concurrent users
+- Recommended workload: one private user and one active Codex job by default
 - No hard file-count limit in the API; processing is bounded by server disk, memory, and request upload size
 - Document text extraction is capped by `MAX_DOCUMENT_CHARS` per file before LLM analysis
 - Custom analysis is capped by `MAX_CUSTOM_SOURCES` and `MAX_CUSTOM_SOURCE_CHARS` before LLM analysis
-- LLM analysis results are cached in `CACHE_FOLDER` by content hash to avoid repeated token spend
+- LLM analysis results are cached in `CACHE_FOLDER` by content hash to avoid repeated Codex runs
+- Codex jobs run sequentially by default (`JOB_MAX_WORKERS=1`) to avoid competing with one user's ChatGPT/Codex limits
 
 ## Security/Quality Improvements Implemented
 

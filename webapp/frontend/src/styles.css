@@ -38,6 +38,23 @@ body {
   margin-bottom: 18px;
 }
 
+.heroTop {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.authPage {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+}
+
+.authCard {
+  width: min(100%, 520px);
+}
+
 .eyebrow {
   font-family: "IBM Plex Mono", monospace;
   text-transform: uppercase;
@@ -99,6 +116,7 @@ h2 {
 }
 
 input[type="text"],
+input[type="password"],
 input[type="file"],
 textarea {
   width: 100%;
@@ -175,6 +193,12 @@ textarea {
   color: #dce8f7;
   box-shadow: none;
   border: 1px solid #35506d;
+}
+
+.btn.small {
+  padding: 10px 14px;
+  font-size: 15px;
+  width: auto;
 }
 
 .meta {

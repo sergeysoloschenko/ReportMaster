@@ -54,7 +54,8 @@ class JobManager:
         self.config = load_config()
         self.jobs: Dict[str, JobState] = {}
         self.lock = threading.Lock()
-        self.executor = ThreadPoolExecutor(max_workers=5)
+        max_workers = int(self.config.get("processing", {}).get("job_max_workers", 1))
+        self.executor = ThreadPoolExecutor(max_workers=max(1, max_workers))
 
     def create_job(
         self,
@@ -271,6 +272,9 @@ class JobManager:
                     "total_tokens": usage_stats.get("total_tokens", 0),
                     "llm_cache_hits": usage_stats.get("cache_hits", 0),
                     "llm_cache_misses": usage_stats.get("cache_misses", 0),
+                    "codex_runs": usage_stats.get("codex_runs", 0),
+                    "prompt_chars": usage_stats.get("prompt_chars", 0),
+                    "output_chars": usage_stats.get("output_chars", 0),
                 }
             )
 

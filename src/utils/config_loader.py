@@ -32,14 +32,19 @@ def load_config():
 
     config.setdefault('api', {})
     config['api'].update({
-        'provider': os.getenv('LLM_PROVIDER', 'gigachat'),
+        'provider': os.getenv('LLM_PROVIDER', 'codex'),
         'gigachat_auth_key': sanitized_gigachat_key or 'not_set',
         'gigachat_scope': os.getenv('GIGACHAT_SCOPE', 'GIGACHAT_API_PERS'),
         'gigachat_verify_ssl': os.getenv('GIGACHAT_VERIFY_SSL', 'true').lower() in {'1', 'true', 'yes', 'on'},
-        'model_categorization': os.getenv('GIGACHAT_MODEL_CATEGORIZATION', 'GigaChat-2'),
-        'model_summarization': os.getenv('GIGACHAT_MODEL_SUMMARIZATION', 'GigaChat-2-Max'),
-        'max_tokens': int(os.getenv('MAX_TOKENS', 2048)),
-        'temperature': float(os.getenv('TEMPERATURE', 0.3))
+        'model_categorization': os.getenv('CODEX_MODEL_CATEGORIZATION') or os.getenv('GIGACHAT_MODEL_CATEGORIZATION', ''),
+        'model_summarization': os.getenv('CODEX_MODEL_SUMMARIZATION') or os.getenv('GIGACHAT_MODEL_SUMMARIZATION', ''),
+        'max_tokens': int(os.getenv('MAX_TOKENS', 4096)),
+        'temperature': float(os.getenv('TEMPERATURE', 0.3)),
+        'codex_command': os.getenv('CODEX_COMMAND', 'codex'),
+        'codex_sandbox': os.getenv('CODEX_SANDBOX_MODE', 'read-only'),
+        'codex_timeout_seconds': int(os.getenv('CODEX_TIMEOUT_SECONDS', 1200)),
+        'codex_max_prompt_chars': int(os.getenv('CODEX_MAX_PROMPT_CHARS', 90000)),
+        'codex_workdir': os.getenv('CODEX_WORKDIR', '')
     })
     
     config.setdefault('paths', {})
@@ -55,7 +60,8 @@ def load_config():
     config['processing'].update({
         'max_document_chars': int(os.getenv('MAX_DOCUMENT_CHARS', 12000)),
         'max_custom_sources': int(os.getenv('MAX_CUSTOM_SOURCES', 80)),
-        'max_custom_source_chars': int(os.getenv('MAX_CUSTOM_SOURCE_CHARS', 5000))
+        'max_custom_source_chars': int(os.getenv('MAX_CUSTOM_SOURCE_CHARS', 5000)),
+        'job_max_workers': int(os.getenv('JOB_MAX_WORKERS', 1))
     })
     
     return config

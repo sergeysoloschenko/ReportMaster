@@ -1,5 +1,37 @@
 const API_BASE = import.meta.env.VITE_API_BASE || "";
 
+export async function getAuthStatus() {
+  const response = await fetch(`${API_BASE}/api/auth/status`, {
+    credentials: "include"
+  });
+  if (!response.ok) {
+    throw new Error("Failed to check authentication");
+  }
+  return response.json();
+}
+
+export async function login(password) {
+  const response = await fetch(`${API_BASE}/api/auth/login`, {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ password })
+  });
+  if (!response.ok) {
+    throw new Error("Invalid password");
+  }
+  return response.json();
+}
+
+export async function logout() {
+  await fetch(`${API_BASE}/api/auth/logout`, {
+    method: "POST",
+    credentials: "include"
+  });
+}
+
 export async function createJob(files, reportMonth, mode, userPrompt) {
   const form = new FormData();
   files.forEach((file) => form.append("files", file));
@@ -9,6 +41,7 @@ export async function createJob(files, reportMonth, mode, userPrompt) {
 
   const response = await fetch(`${API_BASE}/api/jobs`, {
     method: "POST",
+    credentials: "include",
     body: form
   });
   if (!response.ok) {
@@ -26,7 +59,9 @@ export async function createJob(files, reportMonth, mode, userPrompt) {
 }
 
 export async function getJob(jobId) {
-  const response = await fetch(`${API_BASE}/api/jobs/${jobId}`);
+  const response = await fetch(`${API_BASE}/api/jobs/${jobId}`, {
+    credentials: "include"
+  });
   if (!response.ok) {
     throw new Error("Failed to fetch job state");
   }

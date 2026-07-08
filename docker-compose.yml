@@ -9,8 +9,11 @@ services:
       - ./data:/app/data
       - ./logs:/app/logs
       - ./config:/app/config
+      - ./.codex:/root/.codex
     env_file:
       - .env
+    environment:
+      - CODEX_HOME=/root/.codex
     ports:
       - "8000:8000"
 

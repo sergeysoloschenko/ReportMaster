@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { attachmentsUrl, createJob, getJob, reportUrl } from "./api";
+import { attachmentsUrl, createJob, getAuthStatus, getJob, login, logout, reportUrl } from "./api";
 
 const ACCEPTED_TYPES = ".msg,.txt,.csv,.md,.docx,.pdf,.xlsx,.xlsm";
 const MONTHLY_MODE = "monthly_msg_report";
@@ -14,11 +14,35 @@ function App() {
   const [job, setJob] = useState(null);
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [authenticated, setAuthenticated] = useState(false);
+  const [password, setPassword] = useState("");
+  const [authError, setAuthError] = useState("");
 
   const isProcessing = job && !["completed", "failed"].includes(job.status);
 
   useEffect(() => {
-    if (!jobId || !isProcessing) return;
+    let mounted = true;
+    getAuthStatus()
+      .then((state) => {
+        if (!mounted) return;
+        setAuthenticated(state.authenticated);
+      })
+      .catch(() => {
+        if (!mounted) return;
+        setAuthError("Failed to check session");
+      })
+      .finally(() => {
+        if (!mounted) return;
+        setAuthChecked(true);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!authenticated || !jobId || !isProcessing) return;
     const timer = setInterval(async () => {
       try {
         const state = await getJob(jobId);
@@ -79,10 +103,71 @@ function App() {
     }
   }
 
+  async function onLogin(event) {
+    event.preventDefault();
+    setAuthError("");
+    try {
+      await login(password);
+      setAuthenticated(true);
+      setPassword("");
+    } catch (e) {
+      setAuthError(e.message);
+    }
+  }
+
+  async function onLogout() {
+    await logout();
+    setAuthenticated(false);
+    setJobId(null);
+    setJob(null);
+  }
+
+  if (!authChecked) {
+    return (
+      <main className="page authPage">
+        <section className="card authCard">
+          <p className="eyebrow">Private Deployment</p>
+          <h1>ReportMaster</h1>
+          <p className="subtitle">Checking session...</p>
+        </section>
+      </main>
+    );
+  }
+
+  if (!authenticated) {
+    return (
+      <main className="page authPage">
+        <form className="card authCard" onSubmit={onLogin}>
+          <p className="eyebrow">Private Deployment</p>
+          <h1>ReportMaster</h1>
+          <p className="subtitle">Enter the application password.</p>
+          <label className="field">
+            <span>Password</span>
+            <input
+              type="password"
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+          </label>
+          <button className="btn" disabled={!password}>
+            Sign in
+          </button>
+          {authError && <p className="error">{authError}</p>}
+        </form>
+      </main>
+    );
+  }
+
   return (
     <main className="page">
       <section className="card hero">
-        <p className="eyebrow">Private Deployment</p>
+        <div className="heroTop">
+          <p className="eyebrow">Private Deployment</p>
+          <button className="btn ghost small" type="button" onClick={onLogout}>
+            Sign out
+          </button>
+        </div>
         <h1>ReportMaster Web Console</h1>
         <p className="subtitle">
           Upload monthly Outlook emails or run prompt-based analysis on mixed source files.
@@ -178,6 +263,9 @@ function App() {
               <p>Output tokens: {job.stats.output_tokens ?? 0}</p>
               <p>Total tokens: {job.stats.total_tokens ?? 0}</p>
               <p>LLM cache hits: {job.stats.llm_cache_hits ?? 0}</p>
+              <p>Codex runs: {job.stats.codex_runs ?? 0}</p>
+              <p>Prompt chars: {job.stats.prompt_chars ?? 0}</p>
+              <p>Output chars: {job.stats.output_chars ?? 0}</p>
             </div>
           )}
           {job?.status === "completed" && (

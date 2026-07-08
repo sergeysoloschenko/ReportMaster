@@ -5,6 +5,8 @@ GigaChat API Client for categorization and summarization.
 import json
 import logging
 import re
+import shutil
+import subprocess
 import time
 import hashlib
 from typing import Dict, List, Optional
@@ -714,7 +716,130 @@ Email-цепочка в JSON:
         return orgs
 
 
-ClaudeAPIClient = GigaChatAPIClient
+class CodexCLIClient(GigaChatAPIClient):
+    """
+    Backward-compatible client used by the existing pipeline.
+    Runs Codex CLI in non-interactive mode instead of calling a chat API directly.
+    """
+
+    def __init__(self, config: dict):
+        self.logger = logging.getLogger(__name__)
+        self.config = config
+
+        api_cfg = config.get("api", {})
+        self.command = api_cfg.get("codex_command", "codex")
+        self.model_summarization = api_cfg.get("model_summarization", "")
+        self.model_categorization = api_cfg.get("model_categorization", self.model_summarization)
+        self.max_tokens = api_cfg.get("max_tokens", 4096)
+        self.temperature = api_cfg.get("temperature", 0.3)
+        self.timeout_seconds = api_cfg.get("codex_timeout_seconds", 1200)
+        self.sandbox = api_cfg.get("codex_sandbox", "read-only")
+        self.max_prompt_chars = api_cfg.get("codex_max_prompt_chars", 90000)
+        self.workdir = Path(api_cfg.get("codex_workdir") or Path(__file__).resolve().parents[2])
+
+        self._usage = {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "cache_hits": 0,
+            "cache_misses": 0,
+            "codex_runs": 0,
+            "prompt_chars": 0,
+            "output_chars": 0,
+        }
+        cache_dir = Path(config.get("paths", {}).get("cache", "data/cache"))
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        self.cache_path = cache_dir / "llm_analysis_cache.json"
+        self._cache = self._load_cache()
+        self.http = None
+
+        if shutil.which(self.command):
+            self.client = self
+            self.logger.info("Codex CLI client initialized with command '%s'", self.command)
+        else:
+            self.client = None
+            self.logger.warning("Codex CLI command '%s' was not found", self.command)
+
+    def _chat_completion(self, prompt: str, model: str, max_tokens: int) -> str:
+        if not self.client:
+            raise RuntimeError("Codex CLI is not configured")
+
+        worker_prompt = self._worker_prompt(prompt)
+        if len(worker_prompt) > self.max_prompt_chars:
+            worker_prompt = (
+                worker_prompt[: self.max_prompt_chars]
+                + "\n\n[Context truncated by ReportMaster before Codex analysis.]"
+            )
+
+        output_dir = Path(self.config.get("paths", {}).get("temp", "data/temp")) / "codex"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = output_dir / f"codex_result_{uuid4().hex}.txt"
+
+        command = [
+            self.command,
+            "exec",
+            "--sandbox",
+            self.sandbox,
+            "--skip-git-repo-check",
+            "--output-last-message",
+            str(output_path),
+        ]
+        if model:
+            command.extend(["--model", model])
+        command.append("-")
+
+        try:
+            completed = subprocess.run(
+                command,
+                input=worker_prompt,
+                text=True,
+                capture_output=True,
+                cwd=self.workdir,
+                timeout=self.timeout_seconds,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(f"Codex CLI timed out after {self.timeout_seconds} seconds") from exc
+
+        self._usage["codex_runs"] += 1
+        self._usage["prompt_chars"] += len(worker_prompt)
+
+        if completed.returncode != 0:
+            stderr = (completed.stderr or "").strip()
+            stdout = (completed.stdout or "").strip()
+            detail = stderr or stdout or f"exit code {completed.returncode}"
+            raise RuntimeError(f"Codex CLI failed: {detail[-1200:]}")
+
+        content = ""
+        if output_path.exists():
+            content = output_path.read_text(encoding="utf-8", errors="replace").strip()
+            try:
+                output_path.unlink()
+            except OSError:
+                pass
+        if not content:
+            content = (completed.stdout or "").strip()
+        if not content:
+            raise RuntimeError("Codex CLI returned an empty response")
+
+        self._usage["output_chars"] += len(content)
+        return content
+
+    def _worker_prompt(self, prompt: str) -> str:
+        return f"""You are the private ReportMaster analysis worker.
+
+Rules:
+- Analyze only the source text provided in this prompt.
+- Do not modify files.
+- Do not run shell commands unless absolutely necessary.
+- Do not browse the web.
+- Return only the requested final answer.
+
+{prompt}"""
+
+
+ClaudeAPIClient = CodexCLIClient
+ReportMasterLLMClient = CodexCLIClient
 
 
 if __name__ == "__main__":
