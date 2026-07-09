@@ -23,6 +23,15 @@ class DummyAPIClient:
     def categorize_thread(self, subject, keywords, sample_content):
         return {"category": "Общая категория", "description": "test"}
 
+    def triage_thread_relevance(self, thread_payload, directions):
+        return {
+            "include_in_report": True,
+            "direction_id": "DIR_004",
+            "relevance": "high",
+            "reason": "Dyer comments are relevant architect work.",
+            "confidence": "high",
+        }
+
     def analyze_thread_insight(self, thread_payload, directions):
         return {
             "direction_id": "DIR_004",
@@ -34,6 +43,17 @@ class DummyAPIClient:
             "next_steps": ["Подготовить консолидированный ответ"],
             "documents": ["comments.xlsx"],
             "parties": ["Dyer Group"],
+            "confidence": "high",
+        }
+
+
+class ExcludingAPIClient(DummyAPIClient):
+    def triage_thread_relevance(self, thread_payload, directions):
+        return {
+            "include_in_report": False,
+            "direction_id": "DIR_006",
+            "relevance": "none",
+            "reason": "Service notification only.",
             "confidence": "high",
         }
 
@@ -202,7 +222,7 @@ def test_monthly_direction_categorizer_uses_fixed_directions():
     categories = MonthlyDirectionCategorizer().categorize_threads([thread])
 
     assert len(categories) == 6
-    dyer_category = next(category for category in categories if category.name == "Взаимодействие с Dyer")
+    dyer_category = next(category for category in categories if category.name == "Работа с архитектором проекта")
     assert dyer_category.thread_count == 1
 
 
@@ -232,9 +252,40 @@ def test_thread_insight_analyzer_creates_llm_card():
     insight = ThreadInsightAnalyzer({}, DummyAPIClient()).analyze_thread(thread)
 
     assert insight.direction_id == "DIR_004"
-    assert insight.direction_name == "Взаимодействие с Dyer"
+    assert insight.direction_name == "Работа с архитектором проекта"
     assert insight.documents == ["comments.xlsx"]
     assert insight.source_thread is thread
+
+
+def test_thread_insight_analyzer_excludes_irrelevant_threads():
+    now = datetime.now()
+    message = SimpleNamespace(
+        subject="Automatic notification",
+        body="This is an automatic service notification.",
+        analysis_body="This is an automatic service notification.",
+        sender="noreply@example.com",
+        recipients=["pm@example.com"],
+        cc=[],
+        date=now,
+        has_attachments=False,
+        attachments=[],
+        message_id="notification@example",
+    )
+    thread = SimpleNamespace(
+        thread_id="THREAD_001",
+        subject="Automatic notification",
+        messages=[message],
+        participants={"noreply@example.com", "pm@example.com"},
+        message_count=1,
+        total_attachments=0,
+    )
+
+    analyzer = ThreadInsightAnalyzer({}, ExcludingAPIClient())
+
+    insights = analyzer.analyze_threads([thread])
+
+    assert insights == []
+    assert analyzer.last_triage_stats["excluded_threads"] == 1
 
 
 def test_monthly_direction_categorizer_groups_thread_insights():
@@ -244,7 +295,7 @@ def test_monthly_direction_categorizer_groups_thread_insights():
         thread_hash="hash",
         subject="Dyer comments",
         direction_id="DIR_004",
-        direction_name="Взаимодействие с Dyer",
+        direction_name="Работа с архитектором проекта",
         summary="Dyer comments",
         source_thread=thread,
     )
@@ -259,7 +310,7 @@ def test_monthly_direction_categorizer_groups_thread_insights():
 def test_word_generator_includes_detailed_thread_items():
     generator = WordReportGenerator({})
     text = generator._build_investor_cell_text({
-        "category_name": "Взаимодействие с Dyer",
+        "category_name": "Работа с архитектором проекта",
         "message_count": 3,
         "overview": "За период обработаны комментарии Dyer по фасадам.",
         "actions": ["Dyer направил comments.xlsx", "Команда подготовила ответ"],

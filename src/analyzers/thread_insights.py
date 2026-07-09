@@ -35,6 +35,8 @@ class ThreadInsight:
     message_count: int = 0
     attachment_count: int = 0
     confidence: str = "medium"
+    relevance_reason: str = ""
+    triage_confidence: str = "medium"
     source_thread: Optional[EmailThread] = None
 
     @classmethod
@@ -61,6 +63,8 @@ class ThreadInsight:
             message_count=thread.message_count,
             attachment_count=thread.total_attachments,
             confidence=(payload.get("confidence") or "medium").strip(),
+            relevance_reason=(payload.get("relevance_reason") or payload.get("reason") or "").strip(),
+            triage_confidence=(payload.get("triage_confidence") or payload.get("confidence") or "medium").strip(),
             source_thread=thread,
         )
 
@@ -76,20 +80,55 @@ class ThreadInsightAnalyzer:
         self.max_thread_messages = processing_cfg.get("max_thread_insight_messages", 12)
         self.max_message_chars = processing_cfg.get("max_thread_insight_message_chars", 1800)
         self.max_attachment_chars = processing_cfg.get("max_thread_insight_attachment_chars", 1200)
+        self.last_triage_stats = {
+            "included_threads": 0,
+            "excluded_threads": 0,
+        }
 
     def analyze_threads(self, threads: List[EmailThread]) -> List[ThreadInsight]:
         insights = []
+        self.last_triage_stats = {
+            "included_threads": 0,
+            "excluded_threads": 0,
+        }
         for idx, thread in enumerate(threads, 1):
             self.logger.info("Analyzing thread insight %s/%s: %s", idx, len(threads), thread.subject[:80])
-            insights.append(self.analyze_thread(thread))
+            insight = self.analyze_thread(thread)
+            if insight is None:
+                self.last_triage_stats["excluded_threads"] += 1
+                continue
+            self.last_triage_stats["included_threads"] += 1
+            insights.append(insight)
         return insights
 
-    def analyze_thread(self, thread: EmailThread) -> ThreadInsight:
+    def analyze_thread(self, thread: EmailThread) -> Optional[ThreadInsight]:
         thread_hash = self._thread_hash(thread)
         date_range = self._date_range(thread)
         payload = self._thread_payload(thread, thread_hash, date_range)
+        triage = self._triage_thread(payload)
+        if not _as_bool(triage.get("include_in_report"), default=True):
+            self.logger.info(
+                "Excluded thread from report: %s (%s)",
+                thread.subject[:80],
+                triage.get("reason") or triage.get("relevance_reason") or "not relevant",
+            )
+            return None
+
+        payload["preliminary_triage"] = triage
         result = self.api_client.analyze_thread_insight(payload, self._directions_payload())
+        result.setdefault("relevance_reason", triage.get("reason") or triage.get("relevance_reason") or "")
+        result.setdefault("triage_confidence", triage.get("confidence") or "medium")
         return ThreadInsight.from_llm(thread, thread_hash, date_range, result)
+
+    def _triage_thread(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        if hasattr(self.api_client, "triage_thread_relevance"):
+            return self.api_client.triage_thread_relevance(payload, self._directions_payload())
+        return {
+            "include_in_report": True,
+            "direction_id": "DIR_006",
+            "reason": "Triage API is unavailable; included conservatively.",
+            "confidence": "low",
+        }
 
     def _thread_payload(self, thread: EmailThread, thread_hash: str, date_range: str) -> Dict[str, Any]:
         messages = self._select_messages(thread.messages)
@@ -206,3 +245,19 @@ def _list_of_strings(value: Any) -> List[str]:
     if isinstance(value, str) and value.strip():
         return [value.strip()]
     return []
+
+
+def _as_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "yes", "1", "да", "включить", "include"}:
+            return True
+        if normalized in {"false", "no", "0", "нет", "исключить", "exclude"}:
+            return False
+    return default

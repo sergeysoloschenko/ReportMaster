@@ -17,6 +17,17 @@ from uuid import uuid4
 import httpx
 
 
+REPORTMASTER_PROJECT_CONTEXT = """
+Контекст ReportMaster:
+- Автор отчета: менеджер проекта со стороны технического заказчика.
+- Аудитория: заказчик и инвестор проекта.
+- Проект: проектирование и строительство многофункционального комплекса "Марина Геленджик",
+  включая отель, апартаменты и сопутствующие объекты.
+- Цель ежемесячного отчета: показать существенные действия, согласования, документы,
+  решения, открытые вопросы, риски и следующие шаги по ключевым направлениям проекта.
+""".strip()
+
+
 class GigaChatAPIClient:
     """
     Backward-compatible client name used by existing pipeline code.
@@ -238,18 +249,88 @@ class GigaChatAPIClient:
                 "recommendations": "Проверить корректность GigaChat ключа и повторить генерацию",
             }
 
+    def triage_thread_relevance(self, thread_payload: Dict, directions: List[Dict]) -> Dict:
+        """Fast first-pass relevance check before deeper monthly report analysis."""
+        fallback = self._fallback_thread_triage(thread_payload, directions)
+        if not self.client:
+            return fallback
+
+        cache_key = self._cache_key("thread_triage_v1", {
+            "thread_hash": thread_payload.get("thread_hash"),
+            "subject": thread_payload.get("subject"),
+            "message_count": thread_payload.get("message_count"),
+            "attachment_count": thread_payload.get("attachment_count"),
+            "model": getattr(self, "model_triage", self.model_categorization),
+            "reasoning": getattr(self, "reasoning_triage", ""),
+        })
+        cached = self._cache_get(cache_key)
+        if cached:
+            return cached
+
+        directions_text = "\n".join(
+            f"- {item['direction_id']}: {item['name']} — {item['description']}"
+            for item in directions
+        )
+        source_json = json.dumps(thread_payload, ensure_ascii=False, indent=2)[:9000]
+
+        prompt = f"""{REPORTMASTER_PROJECT_CONTEXT}
+
+Ты выполняешь быстрый первичный отбор одной email-цепочки для ежемесячного отчета.
+
+Задача: определить, нужно ли включать цепочку в отчет, и выбрать наиболее подходящее направление.
+
+Критерии включения:
+- Включай цепочки, где есть существенные для проекта действия, документы, согласования, комментарии,
+  решения, открытые вопросы, риски или следующие шаги.
+- Исключай автоматические уведомления, чистую логистику встреч без содержательных решений,
+  дубли, служебные сообщения, рассылки, поздравления, подписи, подтверждения получения без сути.
+- DIR_006 используй только для существенных проектных вопросов, которые не подходят к основным направлениям.
+
+Направления отчета:
+{directions_text}
+
+Email-цепочка в JSON:
+{source_json}
+
+Верни СТРОГО JSON:
+{{
+  "include_in_report": true,
+  "direction_id": "DIR_001|DIR_002|DIR_003|DIR_004|DIR_005|DIR_006",
+  "relevance": "high|medium|low|none",
+  "reason": "краткое объяснение решения",
+  "confidence": "high|medium|low"
+}}"""
+
+        try:
+            content = self._chat_completion(
+                prompt=prompt,
+                model=getattr(self, "model_triage", self.model_categorization),
+                max_tokens=min(self.max_tokens, 900),
+                task_type="triage",
+            )
+            result = self._json_from_content(content) or fallback
+            result = self._normalize_thread_triage_result(result, fallback)
+            self._cache_set(cache_key, result)
+            return result
+        except Exception as e:
+            self.logger.error("Error triaging thread relevance: %s", e)
+            if self._is_auth_error(e):
+                self.client = None
+            return fallback
+
     def analyze_thread_insight(self, thread_payload: Dict, directions: List[Dict]) -> Dict:
         """Analyze one email thread early and return a reusable structured card."""
         fallback = self._fallback_thread_insight(thread_payload, directions)
         if not self.client:
             return fallback
 
-        cache_key = self._cache_key("thread_insight_v1", {
+        cache_key = self._cache_key("thread_insight_v2", {
             "thread_hash": thread_payload.get("thread_hash"),
             "subject": thread_payload.get("subject"),
             "message_count": thread_payload.get("message_count"),
             "attachment_count": thread_payload.get("attachment_count"),
-            "model": self.model_summarization,
+            "model": getattr(self, "model_thread_insight", self.model_summarization),
+            "reasoning": getattr(self, "reasoning_thread_insight", ""),
         })
         cached = self._cache_get(cache_key)
         if cached:
@@ -261,7 +342,9 @@ class GigaChatAPIClient:
         )
         source_json = json.dumps(thread_payload, ensure_ascii=False, indent=2)[:12000]
 
-        prompt = f"""Ты — старший проектный аналитик. Проанализируй ОДНУ email-цепочку до формирования ежемесячного отчёта.
+        prompt = f"""{REPORTMASTER_PROJECT_CONTEXT}
+
+Ты — старший проектный аналитик. Проанализируй ОДНУ email-цепочку до формирования ежемесячного отчёта.
 
 Задача: извлечь факты, документы, решения, открытые вопросы и выбрать направление отчёта.
 
@@ -271,6 +354,7 @@ class GigaChatAPIClient:
 - Не используй ФИО конкретных людей; замени на организации по email-доменам и контексту.
 - Если письмо пересылает документ или есть вложение, явно укажи документ/вложение в documents.
 - direction_id должен быть строго одним из списка.
+- Если preliminary_triage присутствует, используй его как гипотезу, но исправь направление при явной ошибке.
 
 Направления отчёта:
 {directions_text}
@@ -295,8 +379,9 @@ Email-цепочка в JSON:
         try:
             content = self._chat_completion(
                 prompt=prompt,
-                model=self.model_summarization,
+                model=getattr(self, "model_thread_insight", self.model_summarization),
                 max_tokens=min(self.max_tokens, 1800),
+                task_type="thread_insight",
             )
             result = self._json_from_content(content) or fallback
             result = self._normalize_thread_insight_result(result, fallback)
@@ -331,10 +416,11 @@ Email-цепочка в JSON:
         if not self.client:
             return fallback
 
-        cache_key = self._cache_key("direction_summary_v1", {
+        cache_key = self._cache_key("direction_summary_v2", {
             "direction_id": direction.get("direction_id"),
             "insight_hashes": [item.get("thread_hash") for item in insights],
             "model": self.model_summarization,
+            "reasoning": getattr(self, "reasoning_summarization", ""),
             "max_tokens": self.max_tokens,
         })
         cached = self._cache_get(cache_key)
@@ -342,7 +428,9 @@ Email-цепочка в JSON:
             return cached
 
         source_json = json.dumps(insights, ensure_ascii=False, indent=2)[:18000]
-        prompt = f"""Ты — автор ежемесячного отчёта для инвестора по гостиничному девелопмент-проекту.
+        prompt = f"""{REPORTMASTER_PROJECT_CONTEXT}
+
+Ты — автор ежемесячного отчёта для заказчика и инвестора по проекту "Марина Геленджик".
 
 На входе карточки email-цепочек, уже проанализированные LLM. Сформируй содержательный раздел отчёта по направлению.
 
@@ -356,6 +444,7 @@ Email-цепочка в JSON:
 - Укажи конкретные документы, обсуждения, согласования, решения и незакрытые вопросы.
 - Не сжимай до общих фраз вроде "велась переписка"; нужны факты.
 - Если данных мало, честно укажи ограниченность данных.
+- Пиши от лица технического заказчика: фиксируй управленческий смысл переписки, влияние на проектирование/строительство и нужные действия.
 
 Карточки цепочек:
 {source_json}
@@ -384,6 +473,7 @@ Email-цепочка в JSON:
                 prompt=prompt,
                 model=self.model_summarization,
                 max_tokens=self.max_tokens,
+                task_type="summarization",
             )
             result = self._json_from_content(content) or fallback
             result = self._normalize_direction_summary_result(result, fallback)
@@ -412,7 +502,8 @@ Email-цепочка в JSON:
         cache_key = self._cache_key("custom_analysis", {
             "user_prompt": user_prompt,
             "source_texts": source_texts,
-            "model": self.model_summarization,
+            "model": getattr(self, "model_custom_analysis", self.model_summarization),
+            "reasoning": getattr(self, "reasoning_custom_analysis", ""),
             "max_tokens": self.max_tokens,
         })
         cached = self._cache_get(cache_key)
@@ -436,8 +527,9 @@ Email-цепочка в JSON:
         try:
             content = self._chat_completion(
                 prompt=prompt,
-                model=self.model_summarization,
+                model=getattr(self, "model_custom_analysis", self.model_summarization),
                 max_tokens=self.max_tokens,
+                task_type="custom_analysis",
             )
             result = {
                 "title": title,
@@ -471,6 +563,20 @@ Email-цепочка в JSON:
             normalized[key] = self._ensure_string_list(normalized.get(key))
         normalized["summary"] = str(normalized.get("summary") or fallback.get("summary", "")).strip()
         normalized["confidence"] = str(normalized.get("confidence") or "medium").strip()
+        normalized["relevance_reason"] = str(normalized.get("relevance_reason") or fallback.get("relevance_reason", "")).strip()
+        normalized["triage_confidence"] = str(normalized.get("triage_confidence") or "medium").strip()
+        return normalized
+
+    def _normalize_thread_triage_result(self, result: Dict, fallback: Dict) -> Dict:
+        normalized = dict(fallback)
+        normalized.update({key: value for key, value in result.items() if value is not None})
+        normalized["include_in_report"] = self._ensure_bool(normalized.get("include_in_report"), default=True)
+        normalized["direction_id"] = self._normalize_direction_id(normalized.get("direction_id"))
+        relevance = str(normalized.get("relevance") or "medium").strip().lower()
+        normalized["relevance"] = relevance if relevance in {"high", "medium", "low", "none"} else "medium"
+        normalized["reason"] = str(normalized.get("reason") or normalized.get("relevance_reason") or "").strip()
+        confidence = str(normalized.get("confidence") or "medium").strip().lower()
+        normalized["confidence"] = confidence if confidence in {"high", "medium", "low"} else "medium"
         return normalized
 
     def _normalize_direction_summary_result(self, result: Dict, fallback: Dict) -> Dict:
@@ -480,6 +586,17 @@ Email-цепочка в JSON:
         if not isinstance(normalized.get("thread_items"), list):
             normalized["thread_items"] = fallback.get("thread_items", [])
         return normalized
+
+    def _fallback_thread_triage(self, thread_payload: Dict, directions: List[Dict]) -> Dict:
+        text = json.dumps(thread_payload, ensure_ascii=False).lower()
+        direction_id = self._heuristic_direction_id(text)
+        return {
+            "include_in_report": True,
+            "direction_id": direction_id,
+            "relevance": "medium" if direction_id != "DIR_006" else "low",
+            "reason": "Цепочка включена консервативно: автоматический fallback не исключает потенциально важные письма.",
+            "confidence": "low",
+        }
 
     def _fallback_thread_insight(self, thread_payload: Dict, directions: List[Dict]) -> Dict:
         text = json.dumps(thread_payload, ensure_ascii=False).lower()
@@ -501,6 +618,8 @@ Email-цепочка в JSON:
             "documents": attachments[:10],
             "parties": self._extract_organizations(thread_payload.get("participants", [])),
             "confidence": "low",
+            "relevance_reason": "",
+            "triage_confidence": "low",
         }
 
     def _fallback_direction_summary(self, direction: Dict, insights: List[Dict], date_range: str) -> Dict:
@@ -545,7 +664,7 @@ Email-цепочка в JSON:
         }
 
     def _heuristic_direction_id(self, text: str) -> str:
-        if "dyer" in text or "groupdyer" in text:
+        if re.search(r"dyer|groupdyer|dyergroup|архитект|architect", text):
             return "DIR_004"
         if "dusit" in text and re.search(r"договор|agreement|hma|term sheet|loi", text):
             return "DIR_001"
@@ -553,7 +672,7 @@ Email-цепочка в JSON:
             return "DIR_002"
         if re.search(r"заказчик|инвестор|client|investor|port-gdz|порт геленджик", text):
             return "DIR_005"
-        if re.search(r"консультант|consultant|архитект|проектиров|инженер", text):
+        if re.search(r"консультант|consultant|проектиров|инженер|mep|конструкц", text):
             return "DIR_003"
         return "DIR_006"
 
@@ -567,6 +686,21 @@ Email-цепочка в JSON:
         if isinstance(value, str) and value.strip():
             return [value.strip()]
         return []
+
+    def _ensure_bool(self, value, default: bool = False) -> bool:
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return default
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"true", "yes", "1", "да", "включить", "include"}:
+                return True
+            if normalized in {"false", "no", "0", "нет", "исключить", "exclude"}:
+                return False
+        return default
 
     def _get_access_token(self) -> str:
         now = int(time.time())
@@ -598,7 +732,7 @@ Email-цепочка в JSON:
         self._token_expires_at = expires_at
         return token
 
-    def _chat_completion(self, prompt: str, model: str, max_tokens: int) -> str:
+    def _chat_completion(self, prompt: str, model: str, max_tokens: int, task_type: str = "summarization") -> str:
         token = self._get_access_token()
         headers = {
             "Accept": "application/json",
@@ -729,8 +863,21 @@ class CodexCLIClient(GigaChatAPIClient):
 
         api_cfg = config.get("api", {})
         self.command = api_cfg.get("codex_command", "codex")
+        self.model_triage = api_cfg.get("model_triage", "")
+        self.model_thread_insight = api_cfg.get("model_thread_insight", "")
         self.model_summarization = api_cfg.get("model_summarization", "")
-        self.model_categorization = api_cfg.get("model_categorization", self.model_summarization)
+        self.model_custom_analysis = api_cfg.get("model_custom_analysis", self.model_summarization)
+        self.model_categorization = api_cfg.get("model_categorization", self.model_triage)
+        self.reasoning_by_task = {
+            "triage": self._normalize_reasoning(api_cfg.get("reasoning_triage", "low")),
+            "thread_insight": self._normalize_reasoning(api_cfg.get("reasoning_thread_insight", "medium")),
+            "summarization": self._normalize_reasoning(api_cfg.get("reasoning_summarization", "high")),
+            "custom_analysis": self._normalize_reasoning(api_cfg.get("reasoning_custom_analysis", "high")),
+        }
+        self.reasoning_triage = self.reasoning_by_task["triage"]
+        self.reasoning_thread_insight = self.reasoning_by_task["thread_insight"]
+        self.reasoning_summarization = self.reasoning_by_task["summarization"]
+        self.reasoning_custom_analysis = self.reasoning_by_task["custom_analysis"]
         self.max_tokens = api_cfg.get("max_tokens", 4096)
         self.temperature = api_cfg.get("temperature", 0.3)
         self.timeout_seconds = api_cfg.get("codex_timeout_seconds", 1200)
@@ -762,7 +909,7 @@ class CodexCLIClient(GigaChatAPIClient):
             self.client = None
             self.logger.warning("Codex CLI command '%s' was not found", self.command)
 
-    def _chat_completion(self, prompt: str, model: str, max_tokens: int) -> str:
+    def _chat_completion(self, prompt: str, model: str, max_tokens: int, task_type: str = "summarization") -> str:
         if not self.client:
             raise RuntimeError("Codex CLI is not configured")
 
@@ -780,17 +927,22 @@ class CodexCLIClient(GigaChatAPIClient):
         command = [
             self.command,
             "exec",
+        ]
+        reasoning = self._reasoning_for_task(task_type)
+        if reasoning:
+            command.extend(["-c", f'model_reasoning_effort="{reasoning}"'])
+        command.extend([
             "--sandbox",
             self.sandbox,
             "--skip-git-repo-check",
             "--output-last-message",
             str(output_path),
-        ]
+        ])
         if model:
             command.extend(["--model", model])
         command.append("-")
 
-        self._emit_log("Starting Codex CLI analysis", "codex")
+        self._emit_log(f"Starting Codex CLI analysis ({task_type}, reasoning={reasoning or 'default'})", "codex")
         try:
             completed = self._run_codex_command(command, worker_prompt)
         except subprocess.TimeoutExpired as exc:
@@ -820,6 +972,22 @@ class CodexCLIClient(GigaChatAPIClient):
         self._usage["output_chars"] += len(content)
         self._emit_log("Codex CLI analysis completed", "codex")
         return content
+
+    def _reasoning_for_task(self, task_type: str) -> str:
+        return self.reasoning_by_task.get(task_type) or self.reasoning_by_task.get("summarization", "")
+
+    def _normalize_reasoning(self, value: str) -> str:
+        value = (str(value or "")).strip().lower()
+        aliases = {
+            "extra-high": "high",
+            "extra_high": "high",
+            "xhigh": "high",
+            "extra high": "high",
+            "default": "",
+            "none": "",
+        }
+        value = aliases.get(value, value)
+        return value if value in {"low", "medium", "high"} else ""
 
     def _run_codex_command(self, command: List[str], prompt: str):
         process = subprocess.Popen(

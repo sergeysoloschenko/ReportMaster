@@ -227,6 +227,13 @@ class JobManager:
                 self._set_progress(job_id, "thread_insights", 45)
                 self.append_log(job_id, "Starting Codex thread insight analysis", "system")
                 insights = insight_analyzer.analyze_threads(threads)
+                triage_stats = getattr(insight_analyzer, "last_triage_stats", {})
+                self.append_log(
+                    job_id,
+                    f"Triage included {triage_stats.get('included_threads', len(insights))} thread(s), "
+                    f"excluded {triage_stats.get('excluded_threads', 0)} thread(s)",
+                    "system",
+                )
 
                 self._set_progress(job_id, "direction_classification", 60)
                 self.append_log(job_id, "Classifying thread insights into report directions", "system")
@@ -250,6 +257,8 @@ class JobManager:
                 att_stats = attachment_manager.save_attachments(categories, output_dir)
                 total_categories = len(categories)
                 total_insights = len(insights)
+                included_threads = triage_stats.get("included_threads", len(insights))
+                excluded_threads = triage_stats.get("excluded_threads", 0)
             else:
                 self._set_progress(job_id, "custom_analysis", 70)
                 self.append_log(job_id, "Starting Codex custom analysis", "system")
@@ -277,6 +286,8 @@ class JobManager:
                 att_stats = attachment_manager.save_attachments([custom_category], output_dir)
                 total_categories = 0
                 total_insights = 0
+                included_threads = len(threads)
+                excluded_threads = 0
 
             stats = {
                 "mode": mode,
@@ -290,6 +301,8 @@ class JobManager:
                 "total_threads": len(threads),
                 "total_categories": total_categories,
                 "total_insights": total_insights,
+                "included_threads": included_threads,
+                "excluded_threads": excluded_threads,
                 "total_attachments": att_stats["total_attachments"],
                 "unique_attachments": att_stats.get("unique_attachments", att_stats["total_attachments"]),
                 "duplicate_attachments": att_stats.get("duplicate_attachments", 0),

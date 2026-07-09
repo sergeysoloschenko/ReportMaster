@@ -24,8 +24,8 @@ class ReportDirection:
 MONTHLY_DIRECTIONS = [
     ReportDirection(
         direction_id="DIR_001",
-        name="Договор управления с гостиничным оператором Dusit",
-        description="Переписка по согласованию, условиям, приложениям и статусу договора управления с Dusit.",
+        name="Договор с гостиничным оператором",
+        description="Переписка по согласованию, условиям, приложениям и статусу договора с гостиничным оператором.",
         patterns=(
             r"\bdusit\b",
             r"договор управлен",
@@ -33,12 +33,14 @@ MONTHLY_DIRECTIONS = [
             r"hotel management agreement",
             r"operator agreement",
             r"гостиничн\w+ оператор",
+            r"операторск\w+ договор",
+            r"договор.*оператор",
         ),
     ),
     ReportDirection(
         direction_id="DIR_002",
-        name="Техническое сопровождение проектирования Dusit",
-        description="Технические требования Dusit, проектные комментарии, согласование решений и сопровождение проектирования.",
+        name="Техническое сопровождение проектирования",
+        description="Технические требования оператора, проектные комментарии, согласование решений и сопровождение проектирования.",
         patterns=(
             r"\bdusit\b.*(техничес|проект|design|technical|бренд|brand|standards)",
             r"(техничес|проект|design|technical|бренд|brand|standards).*\bdusit\b",
@@ -46,30 +48,39 @@ MONTHLY_DIRECTIONS = [
             r"design review",
             r"technical requirement",
             r"техническ\w+ требован",
+            r"техническ\w+ сопровожд",
+            r"проектн\w+ решен",
+            r"замечан\w+.*проект",
         ),
     ),
     ReportDirection(
         direction_id="DIR_003",
         name="Работа с консультантами проекта",
-        description="Взаимодействие с проектными консультантами, согласование заданий, комментариев, материалов и статусов.",
+        description="Взаимодействие с проектными консультантами, согласование заданий, комментариев, материалов, расчетов и статусов.",
         patterns=(
             r"консультант",
             r"consultant",
-            r"архитект",
             r"проектиров",
             r"инженер",
+            r"меп\b",
+            r"\bmep\b",
+            r"конструкц",
             r"согласован\w+ тз",
             r"комментарии консульт",
         ),
     ),
     ReportDirection(
         direction_id="DIR_004",
-        name="Взаимодействие с Dyer",
-        description="Переписка и рабочие вопросы с Dyer Group.",
+        name="Работа с архитектором проекта",
+        description="Переписка и рабочие вопросы с архитектором проекта, включая Dyer Group и архитектурные решения.",
         patterns=(
             r"\bdyer\b",
             r"groupdyer",
             r"dyergroup",
+            r"архитект",
+            r"architect",
+            r"architectural",
+            r"архитектурн\w+ решен",
         ),
     ),
     ReportDirection(
@@ -88,8 +99,8 @@ MONTHLY_DIRECTIONS = [
     ),
     ReportDirection(
         direction_id="DIR_006",
-        name="Прочее",
-        description="Материалы, не отнесённые к основным направлениям отчёта.",
+        name="Прочее существенное",
+        description="Существенные для проекта материалы, не отнесённые к основным направлениям отчёта.",
         patterns=(),
     ),
 ]
@@ -132,7 +143,7 @@ class MonthlyDirectionCategorizer:
     def _classify_thread(self, thread: EmailThread) -> ReportDirection:
         text = self._thread_text(thread)
 
-        # Dyer is a specific counterparty and should win over generic consultant wording.
+        # The architect is a specific counterparty and should win over generic consultant wording.
         for direction_id in ("DIR_004", "DIR_001", "DIR_002", "DIR_005", "DIR_003"):
             direction = next(item for item in MONTHLY_DIRECTIONS if item.direction_id == direction_id)
             if any(re.search(pattern, text, re.IGNORECASE) for pattern in direction.patterns):

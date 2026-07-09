@@ -20,12 +20,12 @@ ReportMaster is an internal reporting system that:
 
 Default mode for monthly reporting. Upload Outlook `.msg` files for the reporting month. ReportMaster parses email chains, extracts relevant attachment text, removes duplicate content, and generates a report by fixed directions:
 
-1. Договор управления с гостиничным оператором Dusit
-2. Техническое сопровождение проектирования Dusit
+1. Договор с гостиничным оператором
+2. Техническое сопровождение проектирования
 3. Работа с консультантами проекта
-4. Взаимодействие с Dyer
+4. Работа с архитектором проекта
 5. Взаимодействие с Заказчиком/Инвестором
-6. Прочее
+6. Прочее существенное
 
 ### Custom analysis
 
@@ -106,7 +106,13 @@ APP_COOKIE_SECURE=false
 
 LLM_PROVIDER=codex
 CODEX_COMMAND=codex
+CODEX_MODEL_TRIAGE=
+CODEX_MODEL_THREAD_INSIGHT=
 CODEX_SANDBOX_MODE=read-only
+CODEX_REASONING_TRIAGE=low
+CODEX_REASONING_THREAD_INSIGHT=medium
+CODEX_REASONING_SUMMARIZATION=high
+CODEX_REASONING_CUSTOM_ANALYSIS=high
 CODEX_TIMEOUT_SECONDS=1200
 CODEX_MAX_PROMPT_CHARS=90000
 CODEX_WORKDIR=/app
@@ -139,6 +145,7 @@ The web UI asks for `APP_PASSWORD` before uploads, job status, reports, or attac
 - No hard file-count limit in the API; processing is bounded by server disk, memory, and request upload size
 - Document text extraction is capped by `MAX_DOCUMENT_CHARS` per file before LLM analysis
 - Custom analysis is capped by `MAX_CUSTOM_SOURCES` and `MAX_CUSTOM_SOURCE_CHARS` before LLM analysis
+- Monthly reports use staged Codex reasoning: low for relevance triage, medium for thread cards, high for direction summaries
 - LLM analysis results are cached in `CACHE_FOLDER` by content hash to avoid repeated Codex runs
 - Codex jobs run sequentially by default (`JOB_MAX_WORKERS=1`) to avoid competing with one user's ChatGPT/Codex limits
 
