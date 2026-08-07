@@ -38,6 +38,23 @@ body {
   margin-bottom: 18px;
 }
 
+.heroTop {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.authPage {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+}
+
+.authCard {
+  width: min(100%, 520px);
+}
+
 .eyebrow {
   font-family: "IBM Plex Mono", monospace;
   text-transform: uppercase;
@@ -86,6 +103,11 @@ h2 {
   letter-spacing: 0.01em;
 }
 
+h3 {
+  margin: 0;
+  font-size: 20px;
+}
+
 .field {
   display: grid;
   gap: 10px;
@@ -99,7 +121,9 @@ h2 {
 }
 
 input[type="text"],
-input[type="file"] {
+input[type="password"],
+input[type="file"],
+textarea {
   width: 100%;
   border: 1px solid var(--border);
   border-radius: 14px;
@@ -107,6 +131,40 @@ input[type="file"] {
   background: #0f1620;
   color: var(--text);
   font-size: 17px;
+}
+
+textarea {
+  min-height: 150px;
+  resize: vertical;
+  line-height: 1.45;
+}
+
+.modeSwitch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 18px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: #0f1620;
+}
+
+.modeButton {
+  border: 1px solid transparent;
+  border-radius: 10px;
+  padding: 12px 10px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.modeButton.active {
+  background: #203249;
+  border-color: #39526f;
+  color: var(--text);
 }
 
 .btn {
@@ -140,6 +198,12 @@ input[type="file"] {
   color: #dce8f7;
   box-shadow: none;
   border: 1px solid #35506d;
+}
+
+.btn.small {
+  padding: 10px 14px;
+  font-size: 15px;
+  width: auto;
 }
 
 .meta {
@@ -187,6 +251,69 @@ input[type="file"] {
   gap: 12px;
 }
 
+.logPanel {
+  margin-top: 22px;
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+}
+
+.logHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.logHeader span {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.logStream {
+  height: 280px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #0b1119;
+  padding: 12px;
+}
+
+.logLine {
+  display: grid;
+  grid-template-columns: 86px minmax(0, 1fr);
+  gap: 10px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 13px;
+  line-height: 1.45;
+  color: #d7e4f5;
+  padding: 5px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.logLine:last-child {
+  border-bottom: 0;
+}
+
+.logSource {
+  color: #7ad7ff;
+  text-transform: uppercase;
+  overflow-wrap: anywhere;
+}
+
+.logLine.codex .logSource {
+  color: #22d18a;
+}
+
+.logLine.error .logSource {
+  color: var(--danger);
+}
+
+.logMessage {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 760px) {
   .page {
     padding: 18px 12px 28px;
@@ -212,5 +339,10 @@ input[type="file"] {
 
   .btn {
     width: 100%;
+  }
+
+  .logLine {
+    grid-template-columns: 1fr;
+    gap: 2px;
   }
 }

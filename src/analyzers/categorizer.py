@@ -19,10 +19,18 @@ class ThreadCategory:
         self.name = name
         self.description = description
         self.threads = []
+        self.insights = []
     
     def add_thread(self, thread: EmailThread):
         """Add thread to this category"""
         self.threads.append(thread)
+
+    def add_insight(self, insight):
+        """Add pre-analyzed thread insight and keep its source thread for attachments."""
+        self.insights.append(insight)
+        source_thread = getattr(insight, "source_thread", None)
+        if source_thread is not None:
+            self.add_thread(source_thread)
     
     @property
     def thread_count(self):
@@ -118,7 +126,11 @@ class Categorizer:
     def _extract_keywords(self, thread: EmailThread, top_n: int = 10) -> List[str]:
         """Extract keywords from thread messages"""
         # Combine all message bodies
-        all_text = " ".join([msg.body for msg in thread.messages if msg.body])
+        all_text = " ".join([
+            getattr(msg, "analysis_body", None) or msg.body
+            for msg in thread.messages
+            if getattr(msg, "analysis_body", None) or msg.body
+        ])
         
         # Simple keyword extraction - split and count
         words = re.findall(r"[a-zA-Zа-яА-Я0-9]{3,}", all_text.lower())
@@ -145,7 +157,7 @@ class Categorizer:
         
         # Get first message body
         first_msg = thread.messages[0]
-        content = first_msg.body if first_msg.body else ""
+        content = getattr(first_msg, "analysis_body", None) or first_msg.body or ""
         
         # Truncate if too long
         if len(content) > max_length:

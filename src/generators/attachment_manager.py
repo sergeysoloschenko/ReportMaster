@@ -38,11 +38,14 @@ class AttachmentManager:
         
         stats = {
             'total_attachments': 0,
+            'unique_attachments': 0,
+            'duplicate_attachments': 0,
             'categories_with_attachments': 0,
-            'saved_files': []
+            'saved_files': [],
+            '_seen_hashes': set(),
         }
         
-        # Process each category in the same order used for report sections (4.1, 4.2, ...)
+        # Process each category in the same order used for report sections.
         for idx, category in enumerate(categories, 1):
             if category.total_attachments == 0:
                 continue
@@ -50,7 +53,13 @@ class AttachmentManager:
             stats['categories_with_attachments'] += 1
             
             # Create category folder
-            section_label = f"4.{idx}"
+            section_label = {
+                "DIR_001": "4.1",
+                "DIR_002": "4.2",
+                "DIR_003": "4.3",
+                "DIR_004": "4.4",
+                "DIR_005": "4.5",
+            }.get(category.category_id, str(idx))
             category_folder_name = f"{section_label}_{self._sanitize_filename(category.name)}"
             category_folder = attachments_folder / category_folder_name
             category_folder.mkdir(exist_ok=True)
@@ -70,6 +79,7 @@ class AttachmentManager:
                             stats=stats
                         )
         
+        stats.pop('_seen_hashes', None)
         self.logger.info(f"✓ Saved {stats['total_attachments']} attachments in {stats['categories_with_attachments']} categories")
         
         return stats
@@ -83,6 +93,14 @@ class AttachmentManager:
         if not data:
             self.logger.warning(f"  No data for attachment: {filename}")
             return
+
+        content_hash = attachment.get('content_hash')
+        if content_hash:
+            seen_hashes = stats.setdefault('_seen_hashes', set())
+            if content_hash in seen_hashes:
+                stats['duplicate_attachments'] += 1
+                return
+            seen_hashes.add(content_hash)
         
         # Handle duplicate filenames
         output_path = category_folder / filename
@@ -108,6 +126,7 @@ class AttachmentManager:
                 f.write(data)
             
             stats['total_attachments'] += 1
+            stats['unique_attachments'] += 1
             stats['saved_files'].append(str(output_path))
             
             self.logger.debug(f"    Saved: {output_path.name}")

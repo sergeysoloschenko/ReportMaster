@@ -1,11 +1,25 @@
 from datetime import datetime, timedelta
+from email.message import Message
 from pathlib import Path
 from types import SimpleNamespace
 
+import httpx
+import pytest
+from docx import Document
+
 from src.analyzers.categorizer import Categorizer
 from src.analyzers.categorizer import ThreadCategory
+from src.analyzers.monthly_directions import MonthlyDirectionCategorizer
+from src.analyzers.thread_insights import ThreadInsight, ThreadInsightAnalyzer
 from src.generators.attachment_manager import AttachmentManager
+from src.generators.word_generator import WordReportGenerator
+from src.processors.deduplicator import deduplicate_messages, deduplicate_upload_paths, deduplicate_uploads
+from src.processors.document_extractor import DocumentExtractor
+from src.processors.linked_documents import LinkedDocumentDownloader, LinkedDocumentResult
+from src.processors.source_document import SourceDocumentLoader
+from src.parsers.msg_parser import EmailMessage
 from src.parsers.thread_builder import ThreadBuilder
+from src.utils.api_client import GigaChatAPIClient
 
 
 class DummyAPIClient:
@@ -14,6 +28,40 @@ class DummyAPIClient:
 
     def categorize_thread(self, subject, keywords, sample_content):
         return {"category": "Общая категория", "description": "test"}
+
+    def triage_thread_relevance(self, thread_payload, directions):
+        return {
+            "include_in_report": True,
+            "direction_id": "DIR_004",
+            "relevance": "high",
+            "reason": "Dyer comments are relevant architect work.",
+            "confidence": "high",
+        }
+
+    def analyze_thread_insight(self, thread_payload, directions):
+        return {
+            "direction_id": "DIR_004",
+            "summary": "Dyer направил комментарии по проектным решениям.",
+            "actions": ["Dyer направил комментарии"],
+            "decisions": [],
+            "open_questions": ["Требуется ответ проектной команды"],
+            "risks": [],
+            "next_steps": ["Подготовить консолидированный ответ"],
+            "documents": ["comments.xlsx"],
+            "parties": ["Dyer Group"],
+            "confidence": "high",
+        }
+
+
+class ExcludingAPIClient(DummyAPIClient):
+    def triage_thread_relevance(self, thread_payload, directions):
+        return {
+            "include_in_report": False,
+            "direction_id": "DIR_006",
+            "relevance": "none",
+            "reason": "Service notification only.",
+            "confidence": "high",
+        }
 
 
 def _make_thread(subject: str, body: str = "Body text"):
@@ -69,6 +117,73 @@ def test_thread_builder_splits_same_subject_with_low_participant_overlap():
     assert len(threads) == 2
 
 
+def test_thread_builder_links_messages_by_rfc_headers_before_subject_matching():
+    builder = ThreadBuilder({})
+    now = datetime.now()
+    messages = [
+        SimpleNamespace(
+            subject="Initial commercial terms",
+            sender="a@x.com",
+            recipients=["b@x.com"],
+            cc=[],
+            date=now,
+            has_attachments=False,
+            attachment_count=0,
+            message_id="root@example",
+            in_reply_to="",
+            references=[],
+        ),
+        SimpleNamespace(
+            subject="Changed topic line",
+            sender="b@x.com",
+            recipients=["a@x.com"],
+            cc=[],
+            date=now + timedelta(hours=1),
+            has_attachments=False,
+            attachment_count=0,
+            message_id="reply@example",
+            in_reply_to="root@example",
+            references=["root@example"],
+        ),
+    ]
+
+    threads = builder.build_threads(messages)
+
+    assert len(threads) == 1
+    assert threads[0].message_count == 2
+
+
+def test_msg_parser_accepts_header_message_object():
+    headers = Message()
+    headers["Message-ID"] = "<root@example>"
+    headers["In-Reply-To"] = "<parent@example>"
+    headers["References"] = "<grandparent@example> <parent@example>"
+    msg = SimpleNamespace(header=headers, messageId="")
+    email = EmailMessage.__new__(EmailMessage)
+
+    email._extract_header_metadata(msg)
+
+    assert email.message_id == "root@example"
+    assert email.in_reply_to == "parent@example"
+    assert email.references == ["grandparent@example", "parent@example"]
+
+
+def test_msg_parser_can_skip_attachment_text_extraction():
+    attachment = SimpleNamespace(longFilename="notes.txt", shortFilename="", data=b"important text")
+    msg = SimpleNamespace(attachments=[attachment])
+    email = EmailMessage.__new__(EmailMessage)
+    email.logger = SimpleNamespace(warning=lambda *args, **kwargs: None)
+    email.document_extractor = DocumentExtractor()
+
+    attachments = email._extract_attachments(msg, extract_text=False)
+
+    assert len(attachments) == 1
+    assert attachments[0]["filename"] == "notes.txt"
+    assert attachments[0]["data"] == b"important text"
+    assert attachments[0]["extracted_text"] == ""
+    assert attachments[0]["extraction_status"] == "not_needed"
+
+
 def test_attachment_folder_name_matches_report_section_format(tmp_path: Path):
     manager = AttachmentManager({})
     category = ThreadCategory("CAT_001", "Согласование ТЗ")
@@ -82,7 +197,357 @@ def test_attachment_folder_name_matches_report_section_format(tmp_path: Path):
 
     stats = manager.save_attachments([category], tmp_path)
 
-    folder = tmp_path / "Attachments" / "4.1_Согласование ТЗ"
+    folder = tmp_path / "Attachments" / "1_Согласование ТЗ"
     assert folder.exists()
     assert (folder / "spec.pdf").exists()
     assert stats["total_attachments"] == 1
+
+
+def test_monthly_direction_categorizer_uses_fixed_directions():
+    now = datetime.now()
+    message = SimpleNamespace(
+        subject="Dyer design comments",
+        body="Dyer sent updated comments",
+        analysis_body="Dyer sent updated comments",
+        sender="lead@dyergroup.ru",
+        recipients=["pm@example.com"],
+        cc=[],
+        date=now,
+        has_attachments=False,
+        attachment_count=0,
+        attachments=[],
+    )
+    thread = SimpleNamespace(
+        subject="Dyer design comments",
+        messages=[message],
+        participants={"lead@dyergroup.ru", "pm@example.com"},
+        message_count=1,
+        total_attachments=0,
+    )
+
+    categories = MonthlyDirectionCategorizer().categorize_threads([thread])
+
+    assert len(categories) == 5
+    dyer_category = next(category for category in categories if category.name == "Взаимодействие с Dyer")
+    assert dyer_category.thread_count == 1
+
+
+def test_thread_insight_analyzer_creates_llm_card():
+    now = datetime.now()
+    message = SimpleNamespace(
+        subject="Dyer comments",
+        body="Please review Dyer comments attached",
+        analysis_body="Please review Dyer comments attached",
+        sender="lead@dyergroup.ru",
+        recipients=["pm@example.com"],
+        cc=[],
+        date=now,
+        has_attachments=True,
+        attachments=[{"filename": "comments.xlsx", "size": 100, "extracted_text": "Facade comments"}],
+        message_id="thread-1@example",
+    )
+    thread = SimpleNamespace(
+        thread_id="THREAD_001",
+        subject="Dyer comments",
+        messages=[message],
+        participants={"lead@dyergroup.ru", "pm@example.com"},
+        message_count=1,
+        total_attachments=1,
+    )
+
+    insight = ThreadInsightAnalyzer({}, DummyAPIClient()).analyze_thread(thread)
+
+    assert insight.direction_id == "DIR_004"
+    assert insight.direction_name == "Взаимодействие с Dyer"
+    assert insight.documents == ["comments.xlsx"]
+    assert insight.source_thread is thread
+
+
+def test_thread_insight_analyzer_excludes_irrelevant_threads():
+    now = datetime.now()
+    message = SimpleNamespace(
+        subject="Automatic notification",
+        body="This is an automatic service notification.",
+        analysis_body="This is an automatic service notification.",
+        sender="noreply@example.com",
+        recipients=["pm@example.com"],
+        cc=[],
+        date=now,
+        has_attachments=False,
+        attachments=[],
+        message_id="notification@example",
+    )
+    thread = SimpleNamespace(
+        thread_id="THREAD_001",
+        subject="Automatic notification",
+        messages=[message],
+        participants={"noreply@example.com", "pm@example.com"},
+        message_count=1,
+        total_attachments=0,
+    )
+
+    analyzer = ThreadInsightAnalyzer({}, ExcludingAPIClient())
+
+    insights = analyzer.analyze_threads([thread])
+
+    assert insights == []
+    assert analyzer.last_triage_stats["excluded_threads"] == 1
+
+
+def test_monthly_direction_categorizer_groups_thread_insights():
+    thread = SimpleNamespace(message_count=1, total_attachments=0)
+    insight = ThreadInsight(
+        thread_id="THREAD_001",
+        thread_hash="hash",
+        subject="Dyer comments",
+        direction_id="DIR_004",
+        direction_name="Работа с архитектором проекта",
+        summary="Dyer comments",
+        source_thread=thread,
+    )
+
+    categories = MonthlyDirectionCategorizer().categorize_insights([insight])
+
+    dyer_category = next(category for category in categories if category.category_id == "DIR_004")
+    assert dyer_category.thread_count == 1
+    assert dyer_category.insights == [insight]
+
+
+def test_word_generator_includes_detailed_thread_items():
+    generator = WordReportGenerator({})
+    text = generator._build_investor_cell_text({
+        "category_name": "Работа с архитектором проекта",
+        "message_count": 3,
+        "overview": "За период обработаны комментарии Dyer по фасадам.",
+        "actions": ["Dyer направил comments.xlsx", "Команда подготовила ответ"],
+        "result": "Вопрос находится в работе.",
+        "parties": "Dyer Group, Спектрум Холдинг",
+        "remarks": "Открыт вопрос по фасадным решениям.",
+        "recommendations": "Подготовить консолидированный ответ.",
+        "thread_items": [
+            {
+                "subject": "Dyer comments",
+                "date_range": "01.05.2026-03.05.2026",
+                "summary": "Обсуждались комментарии по фасадам.",
+                "status": "В работе",
+            }
+        ],
+    })
+
+    assert "Ключевые действия" in text
+    assert "Существенные цепочки" in text
+    assert "Dyer comments" in text
+
+
+def test_word_generator_accepts_llm_list_fields():
+    generator = WordReportGenerator({})
+    text = generator._build_investor_cell_text({
+        "category_name": "Работа с консультантами проекта",
+        "message_count": 2,
+        "overview": ["Обработаны комментарии консультантов.", "Подготовлен ответ."],
+        "actions": ["Направлены материалы"],
+        "result": ["В работе"],
+        "parties": ["Спектрум Холдинг", "Dyer Group"],
+        "remarks": ["Есть открытый вопрос"],
+        "recommendations": ["Подготовить ответ"],
+    })
+
+    assert "Спектрум Холдинг; Dyer Group" in text
+    assert "Есть открытый вопрос" in text
+    assert "Подготовить ответ" in text
+
+
+def test_deduplicate_uploads_skips_identical_file_bytes():
+    unique, stats = deduplicate_uploads([
+        ("one.msg", b"same"),
+        ("copy.msg", b"same"),
+        ("other.msg", b"different"),
+    ])
+
+    assert len(unique) == 2
+    assert stats.input_count == 3
+    assert stats.unique_count == 2
+    assert stats.duplicate_count == 1
+    assert stats.duplicate_names == ["copy.msg"]
+
+
+def test_deduplicate_upload_paths_skips_identical_files(tmp_path: Path):
+    one = tmp_path / "one.msg"
+    copy = tmp_path / "copy.msg"
+    other = tmp_path / "other.msg"
+    one.write_bytes(b"same")
+    copy.write_bytes(b"same")
+    other.write_bytes(b"different")
+
+    unique, stats = deduplicate_upload_paths([
+        ("one.msg", one),
+        ("copy.msg", copy),
+        ("other.msg", other),
+    ])
+
+    assert [name for name, _, _ in unique] == ["one.msg", "other.msg"]
+    assert stats.input_count == 3
+    assert stats.unique_count == 2
+    assert stats.duplicate_count == 1
+    assert stats.duplicate_names == ["copy.msg"]
+
+
+def test_deduplicate_messages_uses_normalized_content_when_message_id_missing():
+    now = datetime.now()
+    messages = [
+        SimpleNamespace(subject="RE: Status", sender="a@x.com", date=now, message_id="", body="Hello   world"),
+        SimpleNamespace(subject="Status", sender="a@x.com", date=now, message_id="", body="hello world"),
+    ]
+
+    unique, stats = deduplicate_messages(messages)
+
+    assert len(unique) == 1
+    assert stats.duplicate_count == 1
+
+
+def test_document_extractor_reads_text_file():
+    extractor = DocumentExtractor(max_chars=20)
+    extracted = extractor.extract_bytes("notes.txt", "Привет\nмир".encode("utf-8"))
+
+    assert extracted.has_text
+    assert "Привет" in extracted.text
+    assert extracted.skipped_reason is None
+
+
+def test_source_document_loader_creates_pipeline_message(tmp_path: Path):
+    document = tmp_path / "brief.txt"
+    document.write_text("Контекст проекта и список решений", encoding="utf-8")
+
+    messages = SourceDocumentLoader().load_files([document])
+
+    assert len(messages) == 1
+    assert messages[0].subject == "Документ: brief.txt"
+    assert "Контекст проекта" in messages[0].analysis_body
+
+
+def test_monthly_word_report_uses_sample_template_and_preserves_contract_column(tmp_path: Path):
+    generator = WordReportGenerator({})
+    template = Document(generator.TEMPLATE_PATH)
+    expected_contract_cells = [template.tables[0].rows[index].cells[4].text for index in range(3, 8)]
+
+    summaries = {}
+    for index in range(1, 6):
+        summaries[f"DIR_{index:03d}"] = {
+            "date_range": "01.07.2026-31.07.2026",
+            "message_count": 1,
+            "narrative": f"За отчетный период выполнены и зафиксированы работы по направлению {index}.",
+        }
+    summaries["DIR_003"]["unavailable_links"] = ["https://files.example.com/restricted.pdf"]
+
+    output = tmp_path / "report.docx"
+    generator.generate_report(summaries, output)
+    generated = Document(output)
+
+    assert len(generated.tables) == 1
+    assert len(generated.tables[0].columns) == 5
+    assert len(generated.tables[0].rows) == 8
+    assert not any(paragraph.text.strip() for paragraph in generated.paragraphs)
+    assert [generated.tables[0].rows[index].cells[4].text for index in range(3, 8)] == expected_contract_cells
+    assert "Статистика отчета" not in "\n".join(cell.text for row in generated.tables[0].rows for cell in row.cells)
+    assert "https://files.example.com/restricted.pdf" in generated.tables[0].rows[5].cells[1].text
+
+
+def test_monthly_word_report_rejects_placeholder_boilerplate():
+    generator = WordReportGenerator({})
+
+    with pytest.raises(RuntimeError, match="служебные формулировки"):
+        generator._build_monthly_narrative(
+            {
+                "narrative": "Обработана цепочка и проанализирована переписка.",
+                "report_heading": "Работа с консультантами проекта",
+            }
+        )
+
+
+def test_linked_document_downloader_finds_direct_shared_and_safe_links():
+    downloader = LinkedDocumentDownloader()
+    text = (
+        "Скачать: https://files.example.com/design/report.pdf. "
+        "Таблица: https://docs.google.com/spreadsheets/d/abc123/edit?gid=0 "
+        "Сайт: https://example.com/about "
+        "Safe Link: https://eur01.safelinks.protection.outlook.com/?url="
+        "https%3A%2F%2Ffiles.example.com%2Fbrief.docx&data=unused"
+    )
+
+    urls = downloader.extract_document_urls(text)
+
+    assert "https://files.example.com/design/report.pdf" in urls
+    assert "https://docs.google.com/spreadsheets/d/abc123/edit?gid=0" in urls
+    assert any("safelinks.protection.outlook.com" in url for url in urls)
+    assert "https://example.com/about" not in urls
+
+
+def test_linked_document_downloader_returns_downloaded_file(monkeypatch):
+    downloader = LinkedDocumentDownloader()
+    request = httpx.Request("GET", "https://files.example.com/report.pdf")
+    response = httpx.Response(
+        200,
+        request=request,
+        headers={
+            "content-type": "application/pdf",
+            "content-disposition": 'attachment; filename="report.pdf"',
+        },
+        content=b"%PDF-test",
+    )
+    monkeypatch.setattr(
+        downloader,
+        "_request_with_safe_redirects",
+        lambda url: (response, "https://files.example.com/report.pdf"),
+    )
+
+    result = downloader.download("https://files.example.com/report.pdf")
+
+    assert result.success is True
+    assert result.filename == "report.pdf"
+    assert result.data == b"%PDF-test"
+
+
+def test_email_message_adds_linked_documents_and_tracks_failed_links():
+    class FakeDownloader:
+        def download_from_text(self, plain_text, html_text):
+            return [
+                LinkedDocumentResult(
+                    source_url="https://files.example.com/notes.txt",
+                    success=True,
+                    filename="notes.txt",
+                    data="Выполненные работы".encode("utf-8"),
+                ),
+                LinkedDocumentResult(
+                    source_url="https://files.example.com/private.pdf",
+                    success=False,
+                    error="HTTP 403",
+                ),
+            ]
+
+    email = EmailMessage.__new__(EmailMessage)
+    email.body = "Документы по ссылкам"
+    email.html_body = ""
+    email.attachments = []
+    email.document_links = []
+    email.document_extractor = DocumentExtractor()
+    email.linked_document_downloader = FakeDownloader()
+
+    email._extract_linked_documents()
+
+    assert len(email.attachments) == 1
+    assert email.attachments[0]["source_type"] == "linked_document"
+    assert email.attachments[0]["source_url"] == "https://files.example.com/notes.txt"
+    assert email.failed_document_links == ["https://files.example.com/private.pdf"]
+    assert "https://files.example.com/private.pdf" in email._build_analysis_body()
+
+
+def test_monthly_analysis_fails_instead_of_emitting_placeholders_without_llm():
+    client = GigaChatAPIClient.__new__(GigaChatAPIClient)
+    client.client = None
+    client.config = {"processing": {"require_llm_for_monthly": True}}
+
+    with pytest.raises(RuntimeError, match="Обязательная AI-аналитика недоступна"):
+        client.triage_thread_relevance(
+            {"subject": "Project update", "messages": []},
+            [{"direction_id": "DIR_003", "name": "Консультанты", "description": ""}],
+        )
