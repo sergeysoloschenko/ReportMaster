@@ -19,6 +19,7 @@ from src.generators.attachment_manager import AttachmentManager
 from src.generators.word_generator import WordReportGenerator
 from src.processors.deduplicator import deduplicate_messages, deduplicate_upload_paths, deduplicate_uploads
 from src.processors.document_extractor import DocumentExtractor, SUPPORTED_DOCUMENT_EXTENSIONS
+from src.processors.linked_documents import LinkedDocumentDownloader
 from src.processors.source_document import SourceDocumentLoader
 from src.parsers.msg_parser import MSGParser
 from src.parsers.thread_builder import ThreadBuilder
@@ -197,7 +198,17 @@ class JobManager:
                 raise RuntimeError("No supported files uploaded")
 
             document_extractor = DocumentExtractor(max_chars=config.get("processing", {}).get("max_document_chars", 12000))
-            parser = MSGParser(document_extractor=document_extractor)
+            link_cfg = config.get("processing", {}).get("linked_documents", {})
+            linked_document_downloader = LinkedDocumentDownloader(
+                enabled=link_cfg.get("enabled", True),
+                timeout_seconds=float(link_cfg.get("timeout_seconds", 20)),
+                max_bytes=int(link_cfg.get("max_size_mb", 25)) * 1024 * 1024,
+                max_links_per_message=int(link_cfg.get("max_links_per_message", 10)),
+            )
+            parser = MSGParser(
+                document_extractor=document_extractor,
+                linked_document_downloader=linked_document_downloader,
+            )
             document_loader = SourceDocumentLoader(document_extractor=document_extractor)
             thread_builder = ThreadBuilder(config)
             api_client = ClaudeAPIClient(config)
@@ -209,6 +220,24 @@ class JobManager:
             self._set_progress(job_id, "parsing", 10)
             self.append_log(job_id, f"Received {len(files)} uploaded file(s)", "system")
             email_messages = parser.parse_files(msg_files)
+            linked_document_count = sum(
+                1
+                for message in email_messages
+                for item in getattr(message, "document_links", []) or []
+                if item.get("success")
+            )
+            failed_document_link_count = sum(
+                1
+                for message in email_messages
+                for item in getattr(message, "document_links", []) or []
+                if not item.get("success")
+            )
+            if linked_document_count or failed_document_link_count:
+                self.append_log(
+                    job_id,
+                    f"Document links: downloaded {linked_document_count}, failed {failed_document_link_count}",
+                    "system",
+                )
             document_messages = document_loader.load_files(document_files) if mode == CUSTOM_MODE else []
             messages = [*email_messages, *document_messages]
             unique_messages, message_dedup_stats = deduplicate_messages(messages)
@@ -306,6 +335,8 @@ class JobManager:
                 "total_attachments": att_stats["total_attachments"],
                 "unique_attachments": att_stats.get("unique_attachments", att_stats["total_attachments"]),
                 "duplicate_attachments": att_stats.get("duplicate_attachments", 0),
+                "downloaded_linked_documents": linked_document_count,
+                "failed_document_links": failed_document_link_count,
                 "report_size_kb": round(report_path.stat().st_size / 1024, 1),
             }
             usage_stats = api_client.get_usage_stats()

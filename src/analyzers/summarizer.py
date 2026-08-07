@@ -60,16 +60,22 @@ class Summarizer:
                 (
                     {
                         "direction_id": item.direction_id,
+                        "section_number": item.section_number,
                         "name": item.name,
+                        "report_heading": item.report_heading,
                         "description": item.description,
+                        "writing_guidance": item.writing_guidance,
                     }
                     for item in MONTHLY_DIRECTIONS
                     if item.direction_id == category.category_id
                 ),
                 {
                     "direction_id": category.category_id,
+                    "section_number": "",
                     "name": category.name,
+                    "report_heading": category.name,
                     "description": category.description,
+                    "writing_guidance": "",
                 },
             )
             date_range = self._category_date_range(category)
@@ -83,6 +89,8 @@ class Summarizer:
                     "message_count": category.total_messages,
                     "attachment_count": category.total_attachments,
                     "insight_count": len(insights),
+                    "section_number": direction.get("section_number", ""),
+                    "report_heading": direction.get("report_heading", category.name),
                 }
             )
             summaries[category.category_id] = summary
@@ -184,6 +192,7 @@ class Summarizer:
             "risks": insight.risks,
             "next_steps": insight.next_steps,
             "documents": insight.documents,
+            "unavailable_links": insight.unavailable_links,
             "parties": insight.parties,
             "date_range": insight.date_range,
             "message_count": insight.message_count,

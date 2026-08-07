@@ -23,8 +23,9 @@ REPORTMASTER_PROJECT_CONTEXT = """
 - Аудитория: заказчик и инвестор проекта.
 - Проект: проектирование и строительство многофункционального комплекса "Марина Геленджик",
   включая отель, апартаменты и сопутствующие объекты.
-- Цель ежемесячного отчета: показать существенные действия, согласования, документы,
-  решения, открытые вопросы, риски и следующие шаги по ключевым направлениям проекта.
+- Результат должен быть готовым фрагментом общего договорного отчета, а не аналитической справкой.
+- В итоговом тексте нужны только выполненные мероприятия, полученные результаты, существенные
+  решения, замечания и незакрытые вопросы. Служебная информация о письмах и процессе анализа запрещена.
 """.strip()
 
 
@@ -253,9 +254,11 @@ class GigaChatAPIClient:
         """Fast first-pass relevance check before deeper monthly report analysis."""
         fallback = self._fallback_thread_triage(thread_payload, directions)
         if not self.client:
+            if self._strict_monthly_analysis():
+                raise RuntimeError(self._llm_unavailable_message())
             return fallback
 
-        cache_key = self._cache_key("thread_triage_v1", {
+        cache_key = self._cache_key("thread_triage_v2_contract_report", {
             "thread_hash": thread_payload.get("thread_hash"),
             "subject": thread_payload.get("subject"),
             "message_count": thread_payload.get("message_count"),
@@ -273,6 +276,7 @@ class GigaChatAPIClient:
         )
         source_json = json.dumps(thread_payload, ensure_ascii=False, indent=2)[:9000]
 
+        allowed_direction_ids = "|".join(item["direction_id"] for item in directions)
         prompt = f"""{REPORTMASTER_PROJECT_CONTEXT}
 
 Ты выполняешь быстрый первичный отбор одной email-цепочки для ежемесячного отчета.
@@ -284,7 +288,9 @@ class GigaChatAPIClient:
   решения, открытые вопросы, риски или следующие шаги.
 - Исключай автоматические уведомления, чистую логистику встреч без содержательных решений,
   дубли, служебные сообщения, рассылки, поздравления, подписи, подтверждения получения без сути.
-- DIR_006 используй только для существенных проектных вопросов, которые не подходят к основным направлениям.
+- Включай материал только тогда, когда его можно содержательно отнести к одной из пяти строк отчета.
+- Исключай личные вопросы, корпоративные мероприятия, инструктажи, счета без проектного результата
+  и общую переписку Заказчика/Инвестора, не относящуюся к предмету строк 4.1-4.5.
 
 Направления отчета:
 {directions_text}
@@ -295,7 +301,7 @@ Email-цепочка в JSON:
 Верни СТРОГО JSON:
 {{
   "include_in_report": true,
-  "direction_id": "DIR_001|DIR_002|DIR_003|DIR_004|DIR_005|DIR_006",
+  "direction_id": "{allowed_direction_ids}",
   "relevance": "high|medium|low|none",
   "reason": "краткое объяснение решения",
   "confidence": "high|medium|low"
@@ -316,15 +322,19 @@ Email-цепочка в JSON:
             self.logger.error("Error triaging thread relevance: %s", e)
             if self._is_auth_error(e):
                 self.client = None
+            if self._strict_monthly_analysis():
+                raise RuntimeError(f"Обязательная AI-аналитика недоступна: {e}") from e
             return fallback
 
     def analyze_thread_insight(self, thread_payload: Dict, directions: List[Dict]) -> Dict:
         """Analyze one email thread early and return a reusable structured card."""
         fallback = self._fallback_thread_insight(thread_payload, directions)
         if not self.client:
+            if self._strict_monthly_analysis():
+                raise RuntimeError(self._llm_unavailable_message())
             return fallback
 
-        cache_key = self._cache_key("thread_insight_v2", {
+        cache_key = self._cache_key("thread_insight_v3_contract_report", {
             "thread_hash": thread_payload.get("thread_hash"),
             "subject": thread_payload.get("subject"),
             "message_count": thread_payload.get("message_count"),
@@ -342,6 +352,7 @@ Email-цепочка в JSON:
         )
         source_json = json.dumps(thread_payload, ensure_ascii=False, indent=2)[:12000]
 
+        allowed_direction_ids = "|".join(item["direction_id"] for item in directions)
         prompt = f"""{REPORTMASTER_PROJECT_CONTEXT}
 
 Ты — старший проектный аналитик. Проанализируй ОДНУ email-цепочку до формирования ежемесячного отчёта.
@@ -353,6 +364,9 @@ Email-цепочка в JSON:
 - Не выдумывай факты.
 - Не используй ФИО конкретных людей; замени на организации по email-доменам и контексту.
 - Если письмо пересылает документ или есть вложение, явно укажи документ/вложение в documents.
+- Формулируй факты как выполненную проектную работу, а не как описание переписки.
+- Не пиши «обработана цепочка», «проанализирована переписка», «по карточке» и подобные служебные фразы.
+- Ссылки из unavailable_links обязательно верни без изменений в одноименном поле.
 - direction_id должен быть строго одним из списка.
 - Если preliminary_triage присутствует, используй его как гипотезу, но исправь направление при явной ошибке.
 
@@ -364,7 +378,7 @@ Email-цепочка в JSON:
 
 Верни СТРОГО JSON:
 {{
-  "direction_id": "DIR_001|DIR_002|DIR_003|DIR_004|DIR_005|DIR_006",
+  "direction_id": "{allowed_direction_ids}",
   "summary": "3-5 предложений о сути цепочки и ее значении для проекта",
   "actions": ["конкретное действие/направление документа/обсуждение"],
   "decisions": ["принятые или зафиксированные решения, если есть"],
@@ -372,6 +386,7 @@ Email-цепочка в JSON:
   "risks": ["риск или замечание, если есть"],
   "next_steps": ["следующий шаг, если вытекает из переписки"],
   "documents": ["название документа или вложения"],
+  "unavailable_links": ["ссылка на документ, который не удалось скачать"],
   "parties": ["организация 1", "организация 2"],
   "confidence": "high|medium|low"
 }}"""
@@ -391,6 +406,8 @@ Email-цепочка в JSON:
             self.logger.error("Error analyzing thread insight: %s", e)
             if self._is_auth_error(e):
                 self.client = None
+            if self._strict_monthly_analysis():
+                raise RuntimeError(f"Обязательная AI-аналитика недоступна: {e}") from e
             return fallback
 
     def summarize_direction_insights(self, direction: Dict, insights: List[Dict], date_range: str) -> Dict:
@@ -403,6 +420,7 @@ Email-цепочка в JSON:
                 "message_count": 0,
                 "attachment_count": 0,
                 "context": direction.get("description", ""),
+                "narrative": "За отчетный период значимая активность по данному направлению не выявлена.",
                 "overview": "Активность за период не выявлена.",
                 "actions": [],
                 "result": "Активность за период не выявлена.",
@@ -410,13 +428,16 @@ Email-цепочка в JSON:
                 "remarks": "",
                 "recommendations": "",
                 "thread_items": [],
+                "unavailable_links": [],
             }
 
         fallback = self._fallback_direction_summary(direction, insights, date_range)
         if not self.client:
+            if self._strict_monthly_analysis():
+                raise RuntimeError(self._llm_unavailable_message())
             return fallback
 
-        cache_key = self._cache_key("direction_summary_v2", {
+        cache_key = self._cache_key("direction_summary_v4_contract_report", {
             "direction_id": direction.get("direction_id"),
             "insight_hashes": [item.get("thread_hash") for item in insights],
             "model": self.model_summarization,
@@ -427,7 +448,7 @@ Email-цепочка в JSON:
         if cached:
             return cached
 
-        source_json = json.dumps(insights, ensure_ascii=False, indent=2)[:18000]
+        source_json = json.dumps(insights, ensure_ascii=False, indent=2)[:65000]
         prompt = f"""{REPORTMASTER_PROJECT_CONTEXT}
 
 Ты — автор ежемесячного отчёта для заказчика и инвестора по проекту "Марина Геленджик".
@@ -436,36 +457,35 @@ Email-цепочка в JSON:
 
 Направление: {direction['name']}
 Описание направления: {direction.get('description', '')}
+Формулировка строки отчета: {direction.get('report_heading', '')}
+Специальное указание: {direction.get('writing_guidance', '')}
 Период: {date_range}
 
 Правила:
 - Пиши по-русски, деловым нейтральным стилем.
 - Не используй ФИО конкретных людей, только организации.
-- Укажи конкретные документы, обсуждения, согласования, решения и незакрытые вопросы.
-- Не сжимай до общих фраз вроде "велась переписка"; нужны факты.
-- Если данных мало, честно укажи ограниченность данных.
-- Пиши от лица технического заказчика: фиксируй управленческий смысл переписки, влияние на проектирование/строительство и нужные действия.
+- Напиши 2-6 связных абзацев, которые можно без редактирования вставить в графу
+  «Наименование выполненных мероприятий. Результат работ.».
+- Описывай выполненную работу и результат в совершенном виде: «направлено», «получено»,
+  «согласовано», «зафиксировано», «выявлено», «инициировано».
+- Объединяй связанные факты тематически и убирай повторы.
+- Укажи конкретные документы, номера исходящих писем, решения, замечания, влияние на проект
+  и незакрытые вопросы — только если они подтверждены карточками.
+- Не перечисляй темы email и не пиши про цепочки, карточки, переписку, анализ, полноту данных,
+  участников, количество сообщений/вложений или необходимость «проверки финальной редакции».
+- Не добавляй отдельные служебные блоки «Контекст», «Ключевые действия», «Стороны»,
+  «Существенные цепочки», «Риски», «Рекомендации».
+- Не придумывай факты. Если сведений мало, изложи только подтвержденные действия без комментария
+  о недостаточности исходных данных.
+- Ссылки из unavailable_links не перефразируй и верни в одноименном массиве.
 
 Карточки цепочек:
 {source_json}
 
 Верни СТРОГО JSON:
 {{
-  "context": "фон/цель направления за месяц",
-  "overview": "развернутый обзор 1-3 абзаца",
-  "actions": ["конкретное действие 1", "конкретное действие 2"],
-  "result": "текущий статус и результат работ",
-  "parties": "ключевые организации",
-  "remarks": "замечания, риски и открытые вопросы",
-  "recommendations": "следующие шаги и рекомендации",
-  "thread_items": [
-    {{
-      "subject": "тема цепочки",
-      "date_range": "даты",
-      "summary": "1-2 предложения о цепочке",
-      "status": "решено/в работе/требует решения"
-    }}
-  ]
+  "narrative": "готовый текст строки отчета из 2-6 абзацев без заголовка строки",
+  "unavailable_links": ["неизмененная ссылка на документ, который не удалось скачать"]
 }}"""
 
         try:
@@ -477,12 +497,16 @@ Email-цепочка в JSON:
             )
             result = self._json_from_content(content) or fallback
             result = self._normalize_direction_summary_result(result, fallback)
+            if self._strict_monthly_analysis() and not result.get("narrative", "").strip():
+                raise RuntimeError("AI не вернул готовый текст строки отчета")
             self._cache_set(cache_key, result)
             return result
         except Exception as e:
             self.logger.error("Error summarizing direction insights: %s", e)
             if self._is_auth_error(e):
                 self.client = None
+            if self._strict_monthly_analysis():
+                raise RuntimeError(f"Обязательная AI-аналитика недоступна: {e}") from e
             return fallback
 
     def run_custom_analysis(self, user_prompt: str, source_texts: List[str], title: str = "Пользовательский анализ") -> Dict:
@@ -559,7 +583,16 @@ Email-цепочка в JSON:
         normalized = dict(fallback)
         normalized.update({key: value for key, value in result.items() if value is not None})
         normalized["direction_id"] = self._normalize_direction_id(normalized.get("direction_id"))
-        for key in ("actions", "decisions", "open_questions", "risks", "next_steps", "documents", "parties"):
+        for key in (
+            "actions",
+            "decisions",
+            "open_questions",
+            "risks",
+            "next_steps",
+            "documents",
+            "unavailable_links",
+            "parties",
+        ):
             normalized[key] = self._ensure_string_list(normalized.get(key))
         normalized["summary"] = str(normalized.get("summary") or fallback.get("summary", "")).strip()
         normalized["confidence"] = str(normalized.get("confidence") or "medium").strip()
@@ -583,6 +616,13 @@ Email-цепочка в JSON:
         normalized = dict(fallback)
         normalized.update({key: value for key, value in result.items() if value is not None})
         normalized["actions"] = self._ensure_string_list(normalized.get("actions"))
+        normalized["narrative"] = str(normalized.get("narrative") or "").strip()
+        normalized["unavailable_links"] = self._unique_strings(
+            [
+                *self._ensure_string_list(fallback.get("unavailable_links")),
+                *self._ensure_string_list(normalized.get("unavailable_links")),
+            ]
+        )
         if not isinstance(normalized.get("thread_items"), list):
             normalized["thread_items"] = fallback.get("thread_items", [])
         return normalized
@@ -593,7 +633,7 @@ Email-цепочка в JSON:
         return {
             "include_in_report": True,
             "direction_id": direction_id,
-            "relevance": "medium" if direction_id != "DIR_006" else "low",
+            "relevance": "medium",
             "reason": "Цепочка включена консервативно: автоматический fallback не исключает потенциально важные письма.",
             "confidence": "low",
         }
@@ -602,20 +642,23 @@ Email-цепочка в JSON:
         text = json.dumps(thread_payload, ensure_ascii=False).lower()
         direction_id = self._heuristic_direction_id(text)
         attachments = []
+        unavailable_links = []
         for message in thread_payload.get("messages", []):
             for attachment in message.get("attachments", []):
                 filename = attachment.get("filename")
                 if filename:
                     attachments.append(filename)
+            unavailable_links.extend(self._ensure_string_list(message.get("unavailable_links")))
         return {
             "direction_id": direction_id,
-            "summary": f"Обработана цепочка «{thread_payload.get('subject', 'Без темы')}» за период {thread_payload.get('date_range', 'Н/Д')}.",
-            "actions": ["Проанализирована переписка и связанные материалы по цепочке."],
+            "summary": "Обязательная AI-аналитика не выполнена.",
+            "actions": [],
             "decisions": [],
             "open_questions": [],
             "risks": [],
             "next_steps": [],
             "documents": attachments[:10],
+            "unavailable_links": self._unique_strings(unavailable_links),
             "parties": self._extract_organizations(thread_payload.get("participants", [])),
             "confidence": "low",
             "relevance_reason": "",
@@ -628,17 +671,24 @@ Email-цепочка в JSON:
         attachments = 0
         messages = 0
         thread_items = []
+        unavailable_links = []
         for item in insights:
             messages += int(item.get("message_count", 0) or 0)
             attachments += int(item.get("attachment_count", 0) or 0)
             actions.extend(self._ensure_string_list(item.get("actions"))[:3])
             parties.update(self._ensure_string_list(item.get("parties")))
+            unavailable_links.extend(self._ensure_string_list(item.get("unavailable_links")))
             thread_items.append({
                 "subject": item.get("subject", ""),
                 "date_range": item.get("date_range", ""),
                 "summary": item.get("summary", ""),
                 "status": "В работе",
             })
+        narrative_parts = [
+            str(item.get("summary") or "").strip()
+            for item in insights
+            if str(item.get("summary") or "").strip()
+        ]
         return {
             "category_name": direction["name"],
             "date_range": date_range,
@@ -646,9 +696,10 @@ Email-цепочка в JSON:
             "message_count": messages,
             "attachment_count": attachments,
             "context": direction.get("description", ""),
+            "narrative": "\n\n".join(narrative_parts),
             "overview": " ".join(item.get("summary", "") for item in insights[:6] if item.get("summary")),
             "actions": actions[:12],
-            "result": "Статус сформирован по карточкам цепочек; требуется проверка финальной редакции.",
+            "result": "",
             "parties": ", ".join(sorted(parties)[:12]),
             "remarks": "; ".join(
                 value
@@ -661,24 +712,32 @@ Email-цепочка в JSON:
                 for value in self._ensure_string_list(item.get("next_steps"))
             )[:1200],
             "thread_items": thread_items[:20],
+            "unavailable_links": self._unique_strings(unavailable_links),
         }
 
     def _heuristic_direction_id(self, text: str) -> str:
-        if re.search(r"dyer|groupdyer|dyergroup|архитект|architect", text):
-            return "DIR_004"
-        if "dusit" in text and re.search(r"договор|agreement|hma|term sheet|loi", text):
-            return "DIR_001"
-        if "dusit" in text and re.search(r"design|technical|техничес|проект|standard|brand", text):
-            return "DIR_002"
-        if re.search(r"заказчик|инвестор|client|investor|port-gdz|порт геленджик", text):
+        if re.search(r"архитектурн\w+ надзор|пространственн\w+ координац|реестр\w* задан", text):
             return "DIR_005"
-        if re.search(r"консультант|consultant|проектиров|инженер|mep|конструкц", text):
-            return "DIR_003"
-        return "DIR_006"
+        if "dusit" in text and re.search(r"договор|agreement|hma|term sheet|loi|финансов\w+ модел", text):
+            return "DIR_001"
+        if "dusit" in text:
+            return "DIR_002"
+        if re.search(r"dyer|groupdyer|dyergroup|даер|архитектор|architect", text):
+            return "DIR_004"
+        return "DIR_003"
 
     def _normalize_direction_id(self, value: str) -> str:
         value = str(value or "").strip()
-        return value if value in {"DIR_001", "DIR_002", "DIR_003", "DIR_004", "DIR_005", "DIR_006"} else "DIR_006"
+        return value if value in {"DIR_001", "DIR_002", "DIR_003", "DIR_004", "DIR_005"} else "DIR_003"
+
+    def _strict_monthly_analysis(self) -> bool:
+        return bool(self.config.get("processing", {}).get("require_llm_for_monthly", True))
+
+    def _llm_unavailable_message(self) -> str:
+        return (
+            "Обязательная AI-аналитика недоступна. Проверьте авторизацию Codex в контейнере "
+            "(docker compose exec backend codex login --device-auth) и повторите формирование отчета."
+        )
 
     def _ensure_string_list(self, value) -> List[str]:
         if isinstance(value, list):
@@ -686,6 +745,17 @@ Email-цепочка в JSON:
         if isinstance(value, str) and value.strip():
             return [value.strip()]
         return []
+
+    def _unique_strings(self, values: List[str]) -> List[str]:
+        seen = set()
+        unique = []
+        for value in values:
+            text = str(value or "").strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            unique.append(text)
+        return unique
 
     def _ensure_bool(self, value, default: bool = False) -> bool:
         if isinstance(value, bool):

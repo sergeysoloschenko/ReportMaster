@@ -6,8 +6,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from src.analyzers.monthly_directions import MONTHLY_DIRECTIONS
@@ -30,6 +28,7 @@ class ThreadInsight:
     risks: List[str] = field(default_factory=list)
     next_steps: List[str] = field(default_factory=list)
     documents: List[str] = field(default_factory=list)
+    unavailable_links: List[str] = field(default_factory=list)
     parties: List[str] = field(default_factory=list)
     date_range: str = "Н/Д"
     message_count: int = 0
@@ -45,6 +44,10 @@ class ThreadInsight:
         direction_name = next(
             direction.name for direction in MONTHLY_DIRECTIONS if direction.direction_id == direction_id
         )
+        unavailable_links = _list_of_strings(payload.get("unavailable_links"))
+        for message in thread.messages:
+            unavailable_links.extend(getattr(message, "failed_document_links", []) or [])
+
         return cls(
             thread_id=thread.thread_id,
             thread_hash=thread_hash,
@@ -58,6 +61,7 @@ class ThreadInsight:
             risks=_list_of_strings(payload.get("risks")),
             next_steps=_list_of_strings(payload.get("next_steps")),
             documents=_list_of_strings(payload.get("documents")),
+            unavailable_links=_unique_strings(unavailable_links),
             parties=_list_of_strings(payload.get("parties")),
             date_range=date_range,
             message_count=thread.message_count,
@@ -125,7 +129,7 @@ class ThreadInsightAnalyzer:
             return self.api_client.triage_thread_relevance(payload, self._directions_payload())
         return {
             "include_in_report": True,
-            "direction_id": "DIR_006",
+            "direction_id": "DIR_003",
             "reason": "Triage API is unavailable; included conservatively.",
             "confidence": "low",
         }
@@ -154,6 +158,8 @@ class ThreadInsightAnalyzer:
             extracted = (attachment.get("extracted_text") or "").strip()
             if extracted:
                 item["text_excerpt"] = extracted[: self.max_attachment_chars]
+            if attachment.get("source_url"):
+                item["source_url"] = attachment["source_url"]
             attachments.append(item)
 
         return {
@@ -164,6 +170,8 @@ class ThreadInsightAnalyzer:
             "cc": getattr(message, "cc", [])[:10],
             "body_excerpt": body[: self.max_message_chars],
             "attachments": attachments[:12],
+            "linked_documents": list(getattr(message, "document_links", []) or [])[:12],
+            "unavailable_links": list(getattr(message, "failed_document_links", []) or [])[:12],
         }
 
     def _select_messages(self, messages: List[Any]) -> List[Any]:
@@ -213,6 +221,7 @@ class ThreadInsightAnalyzer:
                 "direction_id": direction.direction_id,
                 "name": direction.name,
                 "description": direction.description,
+                "writing_guidance": direction.writing_guidance,
             }
             for direction in MONTHLY_DIRECTIONS
         ]
@@ -236,7 +245,7 @@ class ThreadInsightAnalyzer:
 def _valid_direction_id(value: Any) -> str:
     direction_ids = {direction.direction_id for direction in MONTHLY_DIRECTIONS}
     value = (str(value or "")).strip()
-    return value if value in direction_ids else "DIR_006"
+    return value if value in direction_ids else "DIR_003"
 
 
 def _list_of_strings(value: Any) -> List[str]:
@@ -245,6 +254,18 @@ def _list_of_strings(value: Any) -> List[str]:
     if isinstance(value, str) and value.strip():
         return [value.strip()]
     return []
+
+
+def _unique_strings(values: List[str]) -> List[str]:
+    seen = set()
+    unique = []
+    for value in values:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        unique.append(text)
+    return unique
 
 
 def _as_bool(value: Any, default: bool = False) -> bool:

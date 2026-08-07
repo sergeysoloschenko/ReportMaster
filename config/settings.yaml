@@ -10,6 +10,12 @@ processing:
   max_custom_source_chars: 5000
   deduplicate_uploads: true
   deduplicate_messages: true
+  require_llm_for_monthly: true
+  linked_documents:
+    enabled: true
+    timeout_seconds: 20
+    max_size_mb: 25
+    max_links_per_message: 10
 
 # Email Processing
 email:
@@ -49,8 +55,8 @@ summarization:
 # Report Generation
 report:
   format: "docx"
-  template: "default"
-  include_statistics: true
+  template: "src/generators/templates/monthly_report_template.docx"
+  include_statistics: false
   include_timeline: false
   
   table_style:

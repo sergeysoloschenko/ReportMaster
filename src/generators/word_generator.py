@@ -13,9 +13,27 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_TABLE_ALIGNMENT, WD_ALIGN_VERTICAL
 from typing import Dict, List
 
+from src.analyzers.monthly_directions import MONTHLY_DIRECTIONS
+
 
 class WordReportGenerator:
     """Generate Word document reports in formal structure"""
+
+    TEMPLATE_PATH = Path(__file__).parent / "templates" / "monthly_report_template.docx"
+    TEMPLATE_ROW_BY_DIRECTION = {
+        "DIR_001": 3,
+        "DIR_002": 4,
+        "DIR_003": 5,
+        "DIR_004": 6,
+        "DIR_005": 7,
+    }
+    FORBIDDEN_MONTHLY_BOILERPLATE = (
+        "обработана цепочка",
+        "проанализирована переписка",
+        "статус сформирован по карточкам",
+        "требуется проверка финальной редакции",
+        "существенные цепочки",
+    )
     
     # Russian translations
     TRANSLATIONS_RU = {
@@ -52,25 +70,28 @@ class WordReportGenerator:
         self.font_size = self.table_style.get('font_size', 11)
     
     def generate_report(self, summaries: Dict, output_path: Path, report_month: str = None) -> Path:
-        """Generate structured Word document report"""
+        """Generate a paste-ready contract report fragment from the supplied Word template."""
         self.logger.info(f"Generating structured report: {output_path}")
-        
-        doc = Document()
-        
-        # Set default font
-        style = doc.styles['Normal']
-        font = style.font
-        font.name = self.font
-        font.size = Pt(self.font_size)
-        
-        # Add header
-        self._add_header(doc, report_month)
-        
-        # Add monthly directions in investor-style table
-        self._add_monthly_directions_table(doc, summaries)
-        
-        # Add statistics
-        self._add_statistics(doc, summaries)
+
+        template_path = self._monthly_template_path()
+        doc = Document(str(template_path))
+        if not doc.tables or len(doc.tables[0].rows) < 8 or len(doc.tables[0].columns) != 5:
+            raise RuntimeError(f"Некорректный шаблон ежемесячного отчета: {template_path}")
+
+        table = doc.tables[0]
+        directions_by_id = {direction.direction_id: direction for direction in MONTHLY_DIRECTIONS}
+        for direction_id, row_index in self.TEMPLATE_ROW_BY_DIRECTION.items():
+            summary_data = dict(summaries.get(direction_id) or {})
+            direction = directions_by_id[direction_id]
+            summary_data.setdefault("category_name", direction.name)
+            summary_data.setdefault("report_heading", direction.report_heading)
+
+            row = table.rows[row_index]
+            self._replace_cell_paragraphs(row.cells[1], self._build_monthly_narrative(summary_data))
+            self._replace_cell_paragraphs(
+                row.cells[2],
+                self._format_report_date_range(summary_data.get("date_range")),
+            )
         
         # Save document
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -79,6 +100,93 @@ class WordReportGenerator:
         self.logger.info(f"✓ Report saved: {output_path}")
         
         return output_path
+
+    def _monthly_template_path(self) -> Path:
+        configured = self.config.get("report", {}).get("template")
+        candidates = []
+        if configured and configured != "default":
+            configured_path = Path(configured)
+            candidates.append(configured_path)
+            if not configured_path.is_absolute():
+                candidates.append(Path(__file__).resolve().parents[2] / configured_path)
+        candidates.append(self.TEMPLATE_PATH)
+
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+        raise FileNotFoundError("Не найден шаблон ежемесячного отчета report_sample.docx")
+
+    def _build_monthly_narrative(self, summary_data: Dict) -> str:
+        heading = self._as_text(summary_data.get("report_heading")).strip()
+        narrative = self._as_text(summary_data.get("narrative")).strip()
+
+        if not narrative:
+            overview = self._as_text(summary_data.get("overview") or summary_data.get("context")).strip()
+            actions = [str(item).strip() for item in summary_data.get("actions", []) or [] if str(item).strip()]
+            result = self._as_text(summary_data.get("result")).strip()
+            narrative = "\n\n".join(part for part in (overview, " ".join(actions), result) if part)
+        if not narrative:
+            narrative = "За отчетный период значимая активность по данному направлению не выявлена."
+
+        normalized = narrative.lower()
+        found = [phrase for phrase in self.FORBIDDEN_MONTHLY_BOILERPLATE if phrase in normalized]
+        if found:
+            raise RuntimeError(
+                "AI вернул служебные формулировки вместо готового текста отчета: " + ", ".join(found)
+            )
+
+        blocks = []
+        if heading and not narrative.lower().startswith(heading.lower()):
+            blocks.append(heading)
+        blocks.append(narrative)
+
+        unavailable_links = self._unique_strings(summary_data.get("unavailable_links", []) or [])
+        missing_from_text = [link for link in unavailable_links if link not in narrative]
+        if missing_from_text:
+            blocks.append(
+                "Документы по следующим ссылкам не удалось скачать; ссылки приведены для ручного доступа:\n"
+                + "\n".join(missing_from_text)
+            )
+
+        return "\n\n".join(self._clean_report_block(block) for block in blocks if str(block).strip())
+
+    def _replace_cell_paragraphs(self, cell, text: str) -> None:
+        paragraphs = [part.strip() for part in re.split(r"\n\s*\n", str(text or ""))]
+        paragraphs = [part for part in paragraphs if part] or [""]
+        cell.text = paragraphs[0]
+        for part in paragraphs[1:]:
+            cell.add_paragraph(part)
+
+    def _format_report_date_range(self, value) -> str:
+        text = self._as_text(value).strip()
+        if not text or text == "Н/Д":
+            return ""
+        match = re.fullmatch(r"(\d{2}\.\d{2}\.\d{4})\s*[-–—]\s*(\d{2}\.\d{2}\.\d{4})", text)
+        if match:
+            return f"{match.group(1)}-{match.group(2)}"
+        return text
+
+    def _clean_report_block(self, value: str) -> str:
+        lines = []
+        for raw_line in str(value or "").replace("\r", "").splitlines():
+            line = raw_line.strip()
+            line = re.sub(r"^#{1,6}\s*", "", line)
+            line = re.sub(r"^[-*•]\s+", "", line)
+            lines.append(line)
+        return "\n".join(lines).strip()
+
+    def _unique_strings(self, values) -> List[str]:
+        if isinstance(values, str):
+            values = [values]
+        seen = set()
+        unique = []
+        for value in values:
+            text = str(value or "").strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            unique.append(text)
+        return unique
 
     def generate_custom_report(self, analysis: Dict, output_path: Path, report_month: str = None) -> Path:
         """Generate a free-form analysis/report document."""

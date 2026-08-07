@@ -53,7 +53,13 @@ class AttachmentManager:
             stats['categories_with_attachments'] += 1
             
             # Create category folder
-            section_label = f"{idx}"
+            section_label = {
+                "DIR_001": "4.1",
+                "DIR_002": "4.2",
+                "DIR_003": "4.3",
+                "DIR_004": "4.4",
+                "DIR_005": "4.5",
+            }.get(category.category_id, str(idx))
             category_folder_name = f"{section_label}_{self._sanitize_filename(category.name)}"
             category_folder = attachments_folder / category_folder_name
             category_folder.mkdir(exist_ok=True)

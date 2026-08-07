@@ -68,7 +68,16 @@ def load_config():
         'max_document_chars': int(os.getenv('MAX_DOCUMENT_CHARS', 12000)),
         'max_custom_sources': int(os.getenv('MAX_CUSTOM_SOURCES', 80)),
         'max_custom_source_chars': int(os.getenv('MAX_CUSTOM_SOURCE_CHARS', 5000)),
-        'job_max_workers': int(os.getenv('JOB_MAX_WORKERS', 1))
+        'job_max_workers': int(os.getenv('JOB_MAX_WORKERS', 1)),
+        'require_llm_for_monthly': os.getenv('REQUIRE_LLM_FOR_MONTHLY', 'true').lower() in {'1', 'true', 'yes', 'on'}
+    })
+
+    linked_documents = config['processing'].setdefault('linked_documents', {})
+    linked_documents.update({
+        'enabled': os.getenv('DOWNLOAD_LINKED_DOCUMENTS', 'true').lower() in {'1', 'true', 'yes', 'on'},
+        'timeout_seconds': float(os.getenv('LINK_DOWNLOAD_TIMEOUT_SECONDS', 20)),
+        'max_size_mb': int(os.getenv('LINK_DOWNLOAD_MAX_SIZE_MB', 25)),
+        'max_links_per_message': int(os.getenv('LINK_DOWNLOAD_MAX_PER_MESSAGE', 10)),
     })
     
     return config

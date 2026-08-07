@@ -15,16 +15,23 @@ from email.parser import Parser
 
 from src.processors.deduplicator import hash_text
 from src.processors.document_extractor import DocumentExtractor
+from src.processors.linked_documents import LinkedDocumentDownloader
 
 
 class EmailMessage:
     """Represents a parsed email message"""
     
-    def __init__(self, msg_file: Path, document_extractor: Optional[DocumentExtractor] = None):
+    def __init__(
+        self,
+        msg_file: Path,
+        document_extractor: Optional[DocumentExtractor] = None,
+        linked_document_downloader: Optional[LinkedDocumentDownloader] = None,
+    ):
         self.logger = logging.getLogger(__name__)
         self.file_path = msg_file
         self.msg_id = self._generate_msg_id(msg_file)
         self.document_extractor = document_extractor or DocumentExtractor()
+        self.linked_document_downloader = linked_document_downloader
         
         # Metadata
         self.subject = ""
@@ -46,6 +53,7 @@ class EmailMessage:
         self.attachments = []
         self.has_attachments = False
         self.extracted_attachment_count = 0
+        self.document_links = []
         
         # Parse the message
         self._parse()
@@ -82,6 +90,7 @@ class EmailMessage:
             # Extract attachments
             extract_attachment_text = self._should_include_attachment_text(self.body or self.html_body)
             self.attachments = self._extract_attachments(msg, extract_text=extract_attachment_text)
+            self._extract_linked_documents()
             self.has_attachments = len(self.attachments) > 0
             self.extracted_attachment_count = sum(1 for att in self.attachments if att.get("extracted_text"))
             self.normalized_body_hash = hash_text(self.body or self.html_body or "")
@@ -218,29 +227,83 @@ class EmailMessage:
         
         try:
             for attachment in msg.attachments:
-                filename = attachment.longFilename or attachment.shortFilename or 'unnamed'
-                data = attachment.data if hasattr(attachment, 'data') else None
-                content_hash = self.document_extractor.hash_bytes(data or b"")
-                extracted_text = ""
-                extraction_status = "not_needed"
-                if extract_text:
-                    extracted = self.document_extractor.extract_bytes(filename, data)
-                    content_hash = extracted.content_hash
-                    extracted_text = extracted.text
-                    extraction_status = extracted.skipped_reason or 'ok'
-                att_info = {
-                    'filename': filename,
-                    'size': len(data) if data else 0,
-                    'data': data,
-                    'content_hash': content_hash,
-                    'extracted_text': extracted_text,
-                    'extraction_status': extraction_status
-                }
-                attachments.append(att_info)
+                try:
+                    filename = attachment.longFilename or attachment.shortFilename or 'unnamed'
+                    raw_data = attachment.data if hasattr(attachment, 'data') else None
+                    if isinstance(raw_data, memoryview):
+                        data = raw_data.tobytes()
+                    elif isinstance(raw_data, bytearray):
+                        data = bytes(raw_data)
+                    elif isinstance(raw_data, bytes):
+                        data = raw_data
+                    else:
+                        self.logger.warning("Skipping non-binary attachment: %s", filename)
+                        continue
+
+                    content_hash = self.document_extractor.hash_bytes(data)
+                    extracted_text = ""
+                    extraction_status = "not_needed"
+                    if extract_text:
+                        extracted = self.document_extractor.extract_bytes(filename, data)
+                        content_hash = extracted.content_hash
+                        extracted_text = extracted.text
+                        extraction_status = extracted.skipped_reason or 'ok'
+                    att_info = {
+                        'filename': filename,
+                        'size': len(data),
+                        'data': data,
+                        'content_hash': content_hash,
+                        'extracted_text': extracted_text,
+                        'extraction_status': extraction_status
+                    }
+                    attachments.append(att_info)
+                except Exception as exc:
+                    self.logger.warning("Error extracting one attachment: %s", exc)
         except Exception as e:
             self.logger.warning(f"Error extracting attachments: {e}")
         
         return attachments
+
+    def _extract_linked_documents(self) -> None:
+        """Download public document links and expose failures to report generation."""
+        if not self.linked_document_downloader:
+            return
+
+        results = self.linked_document_downloader.download_from_text(self.body, self.html_body)
+        existing_hashes = {
+            attachment.get("content_hash")
+            for attachment in self.attachments
+            if attachment.get("content_hash")
+        }
+        for result in results:
+            link_info = {
+                "url": result.source_url,
+                "success": result.success,
+                "filename": result.filename,
+                "resolved_url": result.resolved_url,
+                "error": result.error,
+            }
+            self.document_links.append(link_info)
+            if not result.success:
+                continue
+
+            extracted = self.document_extractor.extract_bytes(result.filename, result.data)
+            if extracted.content_hash in existing_hashes:
+                continue
+            existing_hashes.add(extracted.content_hash)
+            self.attachments.append(
+                {
+                    "filename": result.filename,
+                    "size": len(result.data),
+                    "data": result.data,
+                    "content_hash": extracted.content_hash,
+                    "extracted_text": extracted.text,
+                    "extraction_status": extracted.skipped_reason or "ok",
+                    "source_type": "linked_document",
+                    "source_url": result.source_url,
+                    "resolved_url": result.resolved_url,
+                }
+            )
 
     def _build_analysis_body(self) -> str:
         """Build token-conscious text used by downstream categorization/summarization."""
@@ -255,18 +318,43 @@ class EmailMessage:
                 continue
             seen_hashes.add(content_hash)
             attachment_texts.append(
-                f"[Вложение: {attachment.get('filename', 'unnamed')}]\n{text[:4000]}"
+                self._attachment_analysis_text(attachment, text)
             )
+
+        failed_links = self.failed_document_links
+        link_failures_text = ""
+        if failed_links:
+            link_failures_text = "[Документы по ссылкам не удалось скачать: " + "; ".join(failed_links) + "]"
 
         if not attachment_texts:
             if self.attachments:
-                return "\n\n".join([body, self._attachment_index_text()]).strip()
-            return body
+                return "\n\n".join(
+                    part for part in (body, self._attachment_index_text(), link_failures_text) if part
+                ).strip()
+            return "\n\n".join(part for part in (body, link_failures_text) if part).strip()
 
         if self._should_include_attachment_text(body):
-            return "\n\n".join([body, *attachment_texts]).strip()
+            return "\n\n".join(part for part in (body, *attachment_texts, link_failures_text) if part).strip()
 
-        return "\n\n".join([body, self._attachment_index_text()]).strip()
+        return "\n\n".join(
+            part for part in (body, self._attachment_index_text(), link_failures_text) if part
+        ).strip()
+
+    @property
+    def failed_document_links(self) -> List[str]:
+        return [
+            item.get("url", "")
+            for item in self.document_links
+            if not item.get("success") and item.get("url")
+        ]
+
+    def _attachment_analysis_text(self, attachment: Dict, text: str) -> str:
+        if attachment.get("source_type") == "linked_document":
+            return (
+                f"[Документ скачан по ссылке: {attachment.get('filename', 'unnamed')} | "
+                f"{attachment.get('source_url', '')}]\n{text[:4000]}"
+            )
+        return f"[Вложение: {attachment.get('filename', 'unnamed')}]\n{text[:4000]}"
 
     def _attachment_index_text(self) -> str:
         attachment_index = "; ".join(
@@ -314,7 +402,9 @@ class EmailMessage:
             'has_attachments': self.has_attachments,
             'attachment_count': self.attachment_count,
             'extracted_attachment_count': self.extracted_attachment_count,
-            'attachment_names': [a['filename'] for a in self.attachments]
+            'attachment_names': [a['filename'] for a in self.attachments],
+            'document_links': self.document_links,
+            'failed_document_links': self.failed_document_links,
         }
     
     def __repr__(self):
@@ -325,9 +415,14 @@ class EmailMessage:
 class MSGParser:
     """Parse multiple MSG files"""
     
-    def __init__(self, document_extractor: Optional[DocumentExtractor] = None):
+    def __init__(
+        self,
+        document_extractor: Optional[DocumentExtractor] = None,
+        linked_document_downloader: Optional[LinkedDocumentDownloader] = None,
+    ):
         self.logger = logging.getLogger(__name__)
         self.document_extractor = document_extractor or DocumentExtractor()
+        self.linked_document_downloader = linked_document_downloader
     
     def parse_files(self, msg_files: List[Path]) -> List[EmailMessage]:
         """Parse multiple MSG files"""
@@ -337,7 +432,11 @@ class MSGParser:
         
         for msg_file in msg_files:
             try:
-                message = EmailMessage(msg_file, document_extractor=self.document_extractor)
+                message = EmailMessage(
+                    msg_file,
+                    document_extractor=self.document_extractor,
+                    linked_document_downloader=self.linked_document_downloader,
+                )
                 messages.append(message)
             except Exception as e:
                 self.logger.error(f"Failed to parse {msg_file}: {e}")

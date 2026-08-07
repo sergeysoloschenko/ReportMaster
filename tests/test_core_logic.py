@@ -3,6 +3,10 @@ from email.message import Message
 from pathlib import Path
 from types import SimpleNamespace
 
+import httpx
+import pytest
+from docx import Document
+
 from src.analyzers.categorizer import Categorizer
 from src.analyzers.categorizer import ThreadCategory
 from src.analyzers.monthly_directions import MonthlyDirectionCategorizer
@@ -11,9 +15,11 @@ from src.generators.attachment_manager import AttachmentManager
 from src.generators.word_generator import WordReportGenerator
 from src.processors.deduplicator import deduplicate_messages, deduplicate_upload_paths, deduplicate_uploads
 from src.processors.document_extractor import DocumentExtractor
+from src.processors.linked_documents import LinkedDocumentDownloader, LinkedDocumentResult
 from src.processors.source_document import SourceDocumentLoader
 from src.parsers.msg_parser import EmailMessage
 from src.parsers.thread_builder import ThreadBuilder
+from src.utils.api_client import GigaChatAPIClient
 
 
 class DummyAPIClient:
@@ -221,8 +227,8 @@ def test_monthly_direction_categorizer_uses_fixed_directions():
 
     categories = MonthlyDirectionCategorizer().categorize_threads([thread])
 
-    assert len(categories) == 6
-    dyer_category = next(category for category in categories if category.name == "Работа с архитектором проекта")
+    assert len(categories) == 5
+    dyer_category = next(category for category in categories if category.name == "Взаимодействие с Dyer")
     assert dyer_category.thread_count == 1
 
 
@@ -252,7 +258,7 @@ def test_thread_insight_analyzer_creates_llm_card():
     insight = ThreadInsightAnalyzer({}, DummyAPIClient()).analyze_thread(thread)
 
     assert insight.direction_id == "DIR_004"
-    assert insight.direction_name == "Работа с архитектором проекта"
+    assert insight.direction_name == "Взаимодействие с Dyer"
     assert insight.documents == ["comments.xlsx"]
     assert insight.source_thread is thread
 
@@ -417,3 +423,131 @@ def test_source_document_loader_creates_pipeline_message(tmp_path: Path):
     assert len(messages) == 1
     assert messages[0].subject == "Документ: brief.txt"
     assert "Контекст проекта" in messages[0].analysis_body
+
+
+def test_monthly_word_report_uses_sample_template_and_preserves_contract_column(tmp_path: Path):
+    generator = WordReportGenerator({})
+    template = Document(generator.TEMPLATE_PATH)
+    expected_contract_cells = [template.tables[0].rows[index].cells[4].text for index in range(3, 8)]
+
+    summaries = {}
+    for index in range(1, 6):
+        summaries[f"DIR_{index:03d}"] = {
+            "date_range": "01.07.2026-31.07.2026",
+            "message_count": 1,
+            "narrative": f"За отчетный период выполнены и зафиксированы работы по направлению {index}.",
+        }
+    summaries["DIR_003"]["unavailable_links"] = ["https://files.example.com/restricted.pdf"]
+
+    output = tmp_path / "report.docx"
+    generator.generate_report(summaries, output)
+    generated = Document(output)
+
+    assert len(generated.tables) == 1
+    assert len(generated.tables[0].columns) == 5
+    assert len(generated.tables[0].rows) == 8
+    assert not any(paragraph.text.strip() for paragraph in generated.paragraphs)
+    assert [generated.tables[0].rows[index].cells[4].text for index in range(3, 8)] == expected_contract_cells
+    assert "Статистика отчета" not in "\n".join(cell.text for row in generated.tables[0].rows for cell in row.cells)
+    assert "https://files.example.com/restricted.pdf" in generated.tables[0].rows[5].cells[1].text
+
+
+def test_monthly_word_report_rejects_placeholder_boilerplate():
+    generator = WordReportGenerator({})
+
+    with pytest.raises(RuntimeError, match="служебные формулировки"):
+        generator._build_monthly_narrative(
+            {
+                "narrative": "Обработана цепочка и проанализирована переписка.",
+                "report_heading": "Работа с консультантами проекта",
+            }
+        )
+
+
+def test_linked_document_downloader_finds_direct_shared_and_safe_links():
+    downloader = LinkedDocumentDownloader()
+    text = (
+        "Скачать: https://files.example.com/design/report.pdf. "
+        "Таблица: https://docs.google.com/spreadsheets/d/abc123/edit?gid=0 "
+        "Сайт: https://example.com/about "
+        "Safe Link: https://eur01.safelinks.protection.outlook.com/?url="
+        "https%3A%2F%2Ffiles.example.com%2Fbrief.docx&data=unused"
+    )
+
+    urls = downloader.extract_document_urls(text)
+
+    assert "https://files.example.com/design/report.pdf" in urls
+    assert "https://docs.google.com/spreadsheets/d/abc123/edit?gid=0" in urls
+    assert any("safelinks.protection.outlook.com" in url for url in urls)
+    assert "https://example.com/about" not in urls
+
+
+def test_linked_document_downloader_returns_downloaded_file(monkeypatch):
+    downloader = LinkedDocumentDownloader()
+    request = httpx.Request("GET", "https://files.example.com/report.pdf")
+    response = httpx.Response(
+        200,
+        request=request,
+        headers={
+            "content-type": "application/pdf",
+            "content-disposition": 'attachment; filename="report.pdf"',
+        },
+        content=b"%PDF-test",
+    )
+    monkeypatch.setattr(
+        downloader,
+        "_request_with_safe_redirects",
+        lambda url: (response, "https://files.example.com/report.pdf"),
+    )
+
+    result = downloader.download("https://files.example.com/report.pdf")
+
+    assert result.success is True
+    assert result.filename == "report.pdf"
+    assert result.data == b"%PDF-test"
+
+
+def test_email_message_adds_linked_documents_and_tracks_failed_links():
+    class FakeDownloader:
+        def download_from_text(self, plain_text, html_text):
+            return [
+                LinkedDocumentResult(
+                    source_url="https://files.example.com/notes.txt",
+                    success=True,
+                    filename="notes.txt",
+                    data="Выполненные работы".encode("utf-8"),
+                ),
+                LinkedDocumentResult(
+                    source_url="https://files.example.com/private.pdf",
+                    success=False,
+                    error="HTTP 403",
+                ),
+            ]
+
+    email = EmailMessage.__new__(EmailMessage)
+    email.body = "Документы по ссылкам"
+    email.html_body = ""
+    email.attachments = []
+    email.document_links = []
+    email.document_extractor = DocumentExtractor()
+    email.linked_document_downloader = FakeDownloader()
+
+    email._extract_linked_documents()
+
+    assert len(email.attachments) == 1
+    assert email.attachments[0]["source_type"] == "linked_document"
+    assert email.attachments[0]["source_url"] == "https://files.example.com/notes.txt"
+    assert email.failed_document_links == ["https://files.example.com/private.pdf"]
+    assert "https://files.example.com/private.pdf" in email._build_analysis_body()
+
+
+def test_monthly_analysis_fails_instead_of_emitting_placeholders_without_llm():
+    client = GigaChatAPIClient.__new__(GigaChatAPIClient)
+    client.client = None
+    client.config = {"processing": {"require_llm_for_monthly": True}}
+
+    with pytest.raises(RuntimeError, match="Обязательная AI-аналитика недоступна"):
+        client.triage_thread_relevance(
+            {"subject": "Project update", "messages": []},
+            [{"direction_id": "DIR_003", "name": "Консультанты", "description": ""}],
+        )
