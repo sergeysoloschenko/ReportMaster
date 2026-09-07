@@ -411,3 +411,54 @@ def test_live_worker_permission_error_does_not_mark_failed(tmp_path, monkeypatch
 
     monkeypatch.setattr("src.reporting.store.os.kill", inaccessible)
     assert ReportStore(path).get(report["id"])["status"] == "queued"
+
+
+def test_repeated_unavailable_link_is_requested_once_per_run(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    calls = []
+
+    class Downloader:
+        def extract_document_urls(self, body):
+            return ["https://example.org/repeated.xlsx"]
+
+        def download(self, url):
+            calls.append(url)
+            return SimpleNamespace(success=False, error="too large")
+
+    monkeypatch.setattr("src.reporting.pipeline.LinkedDocumentDownloader", Downloader)
+    service = MonthlyService(tmp_path)
+    report = service.store.create("2026-08")
+    messages = [
+        {"id": f"m{i}", "body": "See document", "attachments": []} for i in range(3)
+    ]
+    service.prepare_attachments(messages, object(), report["id"])
+    assert len(calls) == 1
+    assert len({m["attachments"][0]["id"] for m in messages}) == 3
+    assert all(m["attachments"][0]["warning"] == "too large" for m in messages)
+
+
+def test_large_fact_compaction_rejects_unknown_evidence(tmp_path):
+    class Worker:
+        def ask(self, *args):
+            return {
+                "facts": [
+                    {
+                        "section": "4.2",
+                        "text": "Unsupported conclusion",
+                        "evidence_ids": ["invented"],
+                        "attachment_ids": [],
+                    }
+                ]
+            }
+
+    cards = [
+        {
+            "section": "4.2",
+            "text": "A" * 40000,
+            "evidence_ids": ["m1"],
+            "attachment_ids": [],
+        }
+    ] * 3
+    with pytest.raises(ValueError, match="неподтверждённые"):
+        MonthlyService(tmp_path).compact_facts(cards, Worker(), "2026-08")

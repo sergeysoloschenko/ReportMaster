@@ -196,7 +196,10 @@ include_in_report=true. Для отсутствующих сведений ис�
         downloader = LinkedDocumentDownloader()
         folder = self.root / "mail" / "attachments"
         folder.mkdir(parents=True, exist_ok=True)
-        for message in messages:
+        link_results = {}
+        for message_index, message in enumerate(messages, 1):
+            if message_index == 1 or message_index % 20 == 0:
+                self.log(rid, f"Документы: письмо {message_index} из {len(messages)}")
             items = []
             for att in message.get("attachments", []):
                 if service_image(att):
@@ -242,6 +245,10 @@ include_in_report=true. Для отсутствующих сведений ис�
                 if cached and cached.get("path") and Path(cached["path"]).exists():
                     items.append(cached)
                     continue
+                if url in link_results:
+                    item = dict(link_results[url], id=item["id"], url=url)
+                    items.append(item)
+                    continue
                 result = downloader.download(url)
                 if result.success:
                     path = folder / (
@@ -265,9 +272,64 @@ include_in_report=true. Для отсутствующих сведений ис�
                     self.store.cache_set("attachment:" + item["id"], item)
                 else:
                     item["warning"] = result.error
+                link_results[url] = item
                 items.append(item)
             message["attachments"] = items
             self.store.save_message(message)
+
+    def compact_facts(self, cards, worker, period):
+        """Bound synthesis context while retaining explicit evidence and uncertainty."""
+        for _ in range(3):
+            if len(json.dumps(cards, ensure_ascii=False)) <= 100000:
+                return cards
+            groups, group, size = [], [], 0
+            for card in cards:
+                length = len(json.dumps(card, ensure_ascii=False))
+                if group and size + length > 65000:
+                    groups.append(group)
+                    group, size = [], 0
+                group.append(card)
+                size += length
+            if group:
+                groups.append(group)
+            compacted = []
+            for group in groups:
+                value = worker.ask(
+                    "compose",
+                    """Сверни повторяющиеся факты переписки для подготовки месячного отчёта.
+Верни {"facts":[{"section":"4.2","text":"краткое содержание","evidence_ids":[],"attachment_ids":[]}]}.
+Объединяй повторы одного предмета. Сохрани отдельные существенные действия, результаты,
+последние подтверждённые статусы, даты, сроки, противоречия и нерешённые вопросы.
+Не превращай планы в результаты. Старые цитаты не являются новыми событиями.
+Сохрани подтверждающие evidence_ids и относящиеся attachment_ids из переданного пакета.
+Не добавляй факты и ссылки. Текст сожми примерно втрое за счёт повторов и второстепенных подробностей.""",
+                    {"period": period, "facts": group},
+                )
+                evidence = {sid for c in group for sid in c["evidence_ids"]}
+                attachments = {
+                    aid for c in group for aid in c.get("attachment_ids", [])
+                }
+                reduced = value.get("facts", [])
+                if not reduced:
+                    raise ValueError("Сводка фактов оказалась пустой")
+                for card in reduced:
+                    if (
+                        card.get("section") not in ("4.1", "4.2", "4.3", "4.4", "4.5")
+                        or not card.get("text")
+                        or not card.get("evidence_ids")
+                        or not set(card["evidence_ids"]).issubset(evidence)
+                        or not set(card.get("attachment_ids", [])).issubset(attachments)
+                    ):
+                        raise ValueError(
+                            "Сводка фактов содержит неподтверждённые ссылки"
+                        )
+                compacted.extend(reduced)
+            cards = compacted
+        if len(json.dumps(cards, ensure_ascii=False)) > 100000:
+            raise ValueError(
+                "Сводка слишком велика; требуется дополнительная разбивка тем"
+            )
+        return cards
 
     def run(self, rid):
         try:
@@ -368,7 +430,12 @@ include_in_report=true. Для отсутствующих сведений ис�
                 )
                 self.prepare_attachments(relevant, ews, rid)
                 cards = []
-                for batch in chunks(relevant, 48000):
+                fact_batches = list(chunks(relevant, 110000))
+                for batch_index, batch in enumerate(fact_batches, 1):
+                    self.log(
+                        rid,
+                        f"Извлечение фактов: пакет {batch_index} из {len(fact_batches)}",
+                    )
                     result = worker.ask(
                         "extract",
                         """Извлеки конкретные факты, действия, решения, незакрытые вопросы и риски.
@@ -404,6 +471,8 @@ text (факт, дата и статус). Сохрани неопределён
                         ).issubset({m["id"] for m in batch}):
                             raise ValueError("Карточка факта без корректного источника")
                         cards.append(fact)
+                self.store.update(rid, raw_facts=cards)
+                cards = self.compact_facts(cards, worker, report["period"])
                 self.store.update(rid, facts=cards)
                 # Compose by section to bound context; risk review receives all concise cards separately.
                 assembled = {"tasks": [], "risks": [], "warnings": []}
