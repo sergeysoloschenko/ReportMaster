@@ -9,16 +9,29 @@ from datetime import datetime
 import logging
 from typing import Dict, List, Optional
 import hashlib
-import struct
+import re
+from email.message import Message as HeaderMessage
+from email.parser import Parser
+
+from src.processors.deduplicator import hash_text
+from src.processors.document_extractor import DocumentExtractor
+from src.processors.linked_documents import LinkedDocumentDownloader
 
 
 class EmailMessage:
     """Represents a parsed email message"""
     
-    def __init__(self, msg_file: Path):
+    def __init__(
+        self,
+        msg_file: Path,
+        document_extractor: Optional[DocumentExtractor] = None,
+        linked_document_downloader: Optional[LinkedDocumentDownloader] = None,
+    ):
         self.logger = logging.getLogger(__name__)
         self.file_path = msg_file
         self.msg_id = self._generate_msg_id(msg_file)
+        self.document_extractor = document_extractor or DocumentExtractor()
+        self.linked_document_downloader = linked_document_downloader
         
         # Metadata
         self.subject = ""
@@ -33,10 +46,14 @@ class EmailMessage:
         # Content
         self.body = ""
         self.html_body = ""
+        self.analysis_body = ""
+        self.normalized_body_hash = ""
         
         # Attachments
         self.attachments = []
         self.has_attachments = False
+        self.extracted_attachment_count = 0
+        self.document_links = []
         
         # Parse the message
         self._parse()
@@ -64,15 +81,20 @@ class EmailMessage:
             # Extract date using multiple methods
             self.date = self._extract_date_robust(msg)
             
-            self.message_id = getattr(msg, 'messageId', '')
+            self._extract_header_metadata(msg)
             
             # Extract body content
             self.body = msg.body or ""
             self.html_body = msg.htmlBody or ""
             
             # Extract attachments
-            self.attachments = self._extract_attachments(msg)
+            extract_attachment_text = self._should_include_attachment_text(self.body or self.html_body)
+            self.attachments = self._extract_attachments(msg, extract_text=extract_attachment_text)
+            self._extract_linked_documents()
             self.has_attachments = len(self.attachments) > 0
+            self.extracted_attachment_count = sum(1 for att in self.attachments if att.get("extracted_text"))
+            self.normalized_body_hash = hash_text(self.body or self.html_body or "")
+            self.analysis_body = self._build_analysis_body()
             
             msg.close()
             
@@ -131,16 +153,13 @@ class EmailMessage:
         
         # Method 3: Try msg.header for received date
         try:
-            if hasattr(msg, 'header') and msg.header:
-                header = msg.header
-                # Look for Date: header
-                for line in header.split('\n'):
-                    if line.lower().startswith('date:'):
-                        date_str = line.split(':', 1)[1].strip()
-                        from dateutil import parser as date_parser
-                        parsed = date_parser.parse(date_str)
-                        self.logger.debug(f"Date from header: {parsed}")
-                        return parsed
+            parsed_headers = self._parse_msg_headers(msg)
+            date_str = parsed_headers.get("Date", "") if parsed_headers else ""
+            if date_str:
+                from dateutil import parser as date_parser
+                parsed = date_parser.parse(date_str)
+                self.logger.debug(f"Date from header: {parsed}")
+                return parsed
         except Exception as e:
             self.logger.debug(f"Header parsing failed: {e}")
         
@@ -163,23 +182,202 @@ class EmailMessage:
         
         recipients = [r.strip() for r in recipients_str.replace(';', ',').split(',')]
         return [r for r in recipients if r]
+
+    def _extract_header_metadata(self, msg) -> None:
+        """Extract message threading headers where extract_msg exposes them."""
+        parsed_headers = self._parse_msg_headers(msg)
+
+        self.message_id = self._clean_message_id(
+            getattr(msg, "messageId", "") or parsed_headers.get("Message-ID", "")
+        )
+        self.in_reply_to = self._clean_message_id(parsed_headers.get("In-Reply-To", ""))
+        references_header = parsed_headers.get("References", "")
+        self.references = self._extract_message_ids(references_header)
+
+    def _parse_msg_headers(self, msg):
+        raw_header = getattr(msg, "header", None)
+        if not raw_header:
+            return {}
+        if isinstance(raw_header, str):
+            return Parser().parsestr(raw_header)
+        if isinstance(raw_header, HeaderMessage):
+            return raw_header
+        if hasattr(raw_header, "get"):
+            return raw_header
+        return Parser().parsestr(str(raw_header))
+
+    def _clean_message_id(self, value: str) -> str:
+        ids = self._extract_message_ids(value)
+        return ids[0] if ids else (value or "").strip().strip("<>").lower()
+
+    def _extract_message_ids(self, value: str) -> List[str]:
+        if not value:
+            return []
+
+        bracketed = re.findall(r"<([^>]+)>", value)
+        if bracketed:
+            return [item.strip().lower() for item in bracketed if item.strip()]
+
+        tokens = re.split(r"\s+", value.strip())
+        return [token.strip().strip("<>").lower() for token in tokens if token.strip()]
     
-    def _extract_attachments(self, msg) -> List[Dict]:
+    def _extract_attachments(self, msg, extract_text: bool = True) -> List[Dict]:
         """Extract attachment information"""
         attachments = []
         
         try:
             for attachment in msg.attachments:
-                att_info = {
-                    'filename': attachment.longFilename or attachment.shortFilename or 'unnamed',
-                    'size': len(attachment.data) if hasattr(attachment, 'data') else 0,
-                    'data': attachment.data if hasattr(attachment, 'data') else None
-                }
-                attachments.append(att_info)
+                try:
+                    filename = attachment.longFilename or attachment.shortFilename or 'unnamed'
+                    raw_data = attachment.data if hasattr(attachment, 'data') else None
+                    if isinstance(raw_data, memoryview):
+                        data = raw_data.tobytes()
+                    elif isinstance(raw_data, bytearray):
+                        data = bytes(raw_data)
+                    elif isinstance(raw_data, bytes):
+                        data = raw_data
+                    else:
+                        self.logger.warning("Skipping non-binary attachment: %s", filename)
+                        continue
+
+                    content_hash = self.document_extractor.hash_bytes(data)
+                    extracted_text = ""
+                    extraction_status = "not_needed"
+                    if extract_text:
+                        extracted = self.document_extractor.extract_bytes(filename, data)
+                        content_hash = extracted.content_hash
+                        extracted_text = extracted.text
+                        extraction_status = extracted.skipped_reason or 'ok'
+                    att_info = {
+                        'filename': filename,
+                        'size': len(data),
+                        'data': data,
+                        'content_hash': content_hash,
+                        'extracted_text': extracted_text,
+                        'extraction_status': extraction_status
+                    }
+                    attachments.append(att_info)
+                except Exception as exc:
+                    self.logger.warning("Error extracting one attachment: %s", exc)
         except Exception as e:
             self.logger.warning(f"Error extracting attachments: {e}")
         
         return attachments
+
+    def _extract_linked_documents(self) -> None:
+        """Download public document links and expose failures to report generation."""
+        if not self.linked_document_downloader:
+            return
+
+        results = self.linked_document_downloader.download_from_text(self.body, self.html_body)
+        existing_hashes = {
+            attachment.get("content_hash")
+            for attachment in self.attachments
+            if attachment.get("content_hash")
+        }
+        for result in results:
+            link_info = {
+                "url": result.source_url,
+                "success": result.success,
+                "filename": result.filename,
+                "resolved_url": result.resolved_url,
+                "error": result.error,
+            }
+            self.document_links.append(link_info)
+            if not result.success:
+                continue
+
+            extracted = self.document_extractor.extract_bytes(result.filename, result.data)
+            if extracted.content_hash in existing_hashes:
+                continue
+            existing_hashes.add(extracted.content_hash)
+            self.attachments.append(
+                {
+                    "filename": result.filename,
+                    "size": len(result.data),
+                    "data": result.data,
+                    "content_hash": extracted.content_hash,
+                    "extracted_text": extracted.text,
+                    "extraction_status": extracted.skipped_reason or "ok",
+                    "source_type": "linked_document",
+                    "source_url": result.source_url,
+                    "resolved_url": result.resolved_url,
+                }
+            )
+
+    def _build_analysis_body(self) -> str:
+        """Build token-conscious text used by downstream categorization/summarization."""
+        body = self.get_clean_body()
+        attachment_texts = []
+        seen_hashes = set()
+
+        for attachment in self.attachments:
+            text = attachment.get("extracted_text") or ""
+            content_hash = attachment.get("content_hash")
+            if not text or content_hash in seen_hashes:
+                continue
+            seen_hashes.add(content_hash)
+            attachment_texts.append(
+                self._attachment_analysis_text(attachment, text)
+            )
+
+        failed_links = self.failed_document_links
+        link_failures_text = ""
+        if failed_links:
+            link_failures_text = "[Документы по ссылкам не удалось скачать: " + "; ".join(failed_links) + "]"
+
+        if not attachment_texts:
+            if self.attachments:
+                return "\n\n".join(
+                    part for part in (body, self._attachment_index_text(), link_failures_text) if part
+                ).strip()
+            return "\n\n".join(part for part in (body, link_failures_text) if part).strip()
+
+        if self._should_include_attachment_text(body):
+            return "\n\n".join(part for part in (body, *attachment_texts, link_failures_text) if part).strip()
+
+        return "\n\n".join(
+            part for part in (body, self._attachment_index_text(), link_failures_text) if part
+        ).strip()
+
+    @property
+    def failed_document_links(self) -> List[str]:
+        return [
+            item.get("url", "")
+            for item in self.document_links
+            if not item.get("success") and item.get("url")
+        ]
+
+    def _attachment_analysis_text(self, attachment: Dict, text: str) -> str:
+        if attachment.get("source_type") == "linked_document":
+            return (
+                f"[Документ скачан по ссылке: {attachment.get('filename', 'unnamed')} | "
+                f"{attachment.get('source_url', '')}]\n{text[:4000]}"
+            )
+        return f"[Вложение: {attachment.get('filename', 'unnamed')}]\n{text[:4000]}"
+
+    def _attachment_index_text(self) -> str:
+        attachment_index = "; ".join(
+            attachment.get("filename", "unnamed") for attachment in self.attachments
+        )
+        return f"[Вложения без полного текста в LLM-контексте: {attachment_index}]"
+
+    def _should_include_attachment_text(self, body: str) -> bool:
+        if len((body or "").strip()) < 700:
+            return True
+
+        attachment_markers = [
+            r"во влож",
+            r"вложени",
+            r"прилага",
+            r"см\.\s*файл",
+            r"см\.\s*влож",
+            r"attached",
+            r"attachment",
+            r"see attached",
+        ]
+        text = (body or "").lower()
+        return any(re.search(marker, text) for marker in attachment_markers)
     
     def get_clean_body(self) -> str:
         """Get cleaned email body text"""
@@ -197,10 +395,16 @@ class EmailMessage:
             'cc': self.cc,
             'date': self.date.isoformat() if self.date else None,
             'message_id': self.message_id,
+            'in_reply_to': self.in_reply_to,
+            'references': self.references,
             'body': self.body,
+            'analysis_body': self.analysis_body,
             'has_attachments': self.has_attachments,
             'attachment_count': self.attachment_count,
-            'attachment_names': [a['filename'] for a in self.attachments]
+            'extracted_attachment_count': self.extracted_attachment_count,
+            'attachment_names': [a['filename'] for a in self.attachments],
+            'document_links': self.document_links,
+            'failed_document_links': self.failed_document_links,
         }
     
     def __repr__(self):
@@ -211,8 +415,14 @@ class EmailMessage:
 class MSGParser:
     """Parse multiple MSG files"""
     
-    def __init__(self):
+    def __init__(
+        self,
+        document_extractor: Optional[DocumentExtractor] = None,
+        linked_document_downloader: Optional[LinkedDocumentDownloader] = None,
+    ):
         self.logger = logging.getLogger(__name__)
+        self.document_extractor = document_extractor or DocumentExtractor()
+        self.linked_document_downloader = linked_document_downloader
     
     def parse_files(self, msg_files: List[Path]) -> List[EmailMessage]:
         """Parse multiple MSG files"""
@@ -222,7 +432,11 @@ class MSGParser:
         
         for msg_file in msg_files:
             try:
-                message = EmailMessage(msg_file)
+                message = EmailMessage(
+                    msg_file,
+                    document_extractor=self.document_extractor,
+                    linked_document_downloader=self.linked_document_downloader,
+                )
                 messages.append(message)
             except Exception as e:
                 self.logger.error(f"Failed to parse {msg_file}: {e}")

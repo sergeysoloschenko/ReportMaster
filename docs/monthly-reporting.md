@@ -1,0 +1,68 @@
+# Ежемесячные отчёты по отелю и апартаментам
+
+## Рабочий сценарий
+
+1. Импортировать исходный DOCX с явно указанным периодом. Предоставленный файл «Отчет Техзаказчика Август 2026.docx» содержит июльские пункты Солощенко и смешанные даты в остальных частях; исходный период по указанию владельца — 2026-07.
+2. Проверить разложение на задачи и релевантные риски, исправить формулировки и утвердить исходную версию.
+3. Выбрать завершённый месяц и сформировать отчёт. Интервалы считаются по Europe/Moscow, начало включительно, начало следующего месяца исключительно.
+4. Проверить таблицы, письма-основания, полноту сбора и предупреждения по вложениям. Сохранить правки, утвердить версию и скачать DOCX и ZIP.
+5. Следующий период использует последнюю утверждённую версию с более ранним месяцем. Черновики не становятся исходными данными автоматически. Для исправления утверждённого отчёта создаётся новая редакция.
+
+## Модели и лимиты
+
+Официальный `openai-codex==0.147.0`, Python 3.11. SDK поставляет закреплённую версию среды Codex. Авторизация ChatGPT проверяется при запуске; API-ключи не используются. Доступность выбранных моделей проверяется через каталог аккаунта. Отсутствие модели приводит к понятной ошибке, а не скрытой замене.
+
+| Этап | Модель | Reasoning |
+|---|---|---|
+| Отбор писем | gpt-5.6-luna | low |
+| Извлечение фактов | gpt-5.6-luna | medium |
+| Разбор предыдущего отчёта | gpt-5.6-terra | medium |
+| Сопоставление задач и редакция | gpt-5.6-terra | medium |
+| Пересмотр рисков | gpt-5.6-terra | medium |
+
+Это начальный экономичный профиль, а не результат измеренного сравнения качества на всей почте. По официальным рекомендациям Luna подходит для массовой классификации и извлечения, Terra — для задач с дополнительным рассуждением. Старые gpt-5.4 и gpt-5.4-mini не используются. Источники: https://learn.chatgpt.com/docs/models и https://learn.chatgpt.com/docs/codex-sdk (проверены 2026-09-07).
+
+SDK не расширяет лимиты подписки. Сохраняются фактическое число вызовов и расход токенов. Ключ кеша включает инструкции, модель, reasoning, JSON-схему и весь переданный контекст. Отбор выполняется пакетами; длинные письма разбиваются без потери хвоста; вложения скачиваются только для отобранных сообщений. Ошибки получения письма или неполная пагинация не позволяют объявить сбор завершённым.
+
+## Настройка
+
+```bash
+python3.11 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python scripts/setup_ews_password.py
+```
+
+В `.env` задать `EWS_PASSWORD_FILE=data/history/ews_password` и параметры из `.env.example`. Пароль вводится скрыто, файл имеет режим 0600 и исключён из Git. На Docker-сервере:
+
+```bash
+docker compose exec backend python scripts/setup_ews_password.py
+docker compose exec backend python scripts/codex_login.py
+```
+
+Обновлённый контейнер использует Python SDK; отдельная глобальная npm-установка Codex не требуется. Существующий том `.codex:/root/.codex` сохраняется. Код на сервере обновлять только из GitHub перед `docker compose up -d --build`.
+
+## Данные
+
+- `data/history/reports.sqlite3`: версии, задачи, риски, источники и кеш анализа.
+- `data/reference`: исходные документы вне Git.
+- `data/mail/attachments`: документы по хешу содержимого.
+- `data/output/history`: таблицы и архив вложений по версии.
+- `config/project_participants.yaml`: согласованный справочник участников.
+
+Резервировать весь `data` и серверный `.codex` с ограничением доступа. SQLite рассчитана на один экземпляр приложения с одной последовательной очередью месячных отчётов. Недопустимо запускать несколько Uvicorn workers для обработки одной очереди.
+
+## Ограничения и проверка
+
+EWS читает Inbox, Sent Items и их подпапки. Письма, перенесённые в другие корневые папки или отдельный архивный ящик, в этот охват не входят; полнота в интерфейсе относится к перечисленным папкам. Не используются операции изменения почты.
+
+Вложения без извлекаемого текста сохраняются как документы, но не считаются прочитанными. Изображения и сканы требуют проверки; текстовое извлечение не заменяет OCR. Файлы свыше 50 МБ остаются доступными через письмо-основание, с предупреждением. Недоступные публичные ссылки сохраняются. NTLM-пароль не передаётся на сайты по ссылкам.
+
+Без новых писем задача/риск сохраняет подтверждённый статус и исключается из повторной таблицы. Активные пункты без обновлений отображаются в предупреждениях. Снятие риска и завершение задачи требуют текущего источника. Релевантность определяется содержанием, а не только фамилиями участников.
+
+## Validation and current state
+
+47 tests pass, including the synthetic EWS-to-DOCX/ZIP approval flow. Vite production build passes. Live ChatGPT SDK authentication, Luna/Terra availability and Luna relevance checks succeeded. Exchange returned all 287 August messages (240 incoming, 47 sent) from the configured folders.
+
+The user approved July. The reviewed August draft contains 46 items across five sections and 6 risks, based on 184 selected messages including conversation context. All 13 pages were inspected from Microsoft Word print output. The authenticated DOCX and ZIP downloads were checked; the ZIP contains 81 entries and passes integrity verification. The application and history are deployed on Hostinger; access and operations are documented in project-guide.md.
+
+The first real run exposed mixed document/mail references and duplicate continuations; the main pipeline now normalizes known attachment references to their owning messages and merges continuations. Existing risk numbers retain their identity and rank. Repeated links are downloaded once per run, including failures. Extraction batches allow 110000 characters; large fact sets are compacted before synthesis while validating evidence references. The DOCX exporter uses real paragraphs to avoid stretched final lines in justified text.

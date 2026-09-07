@@ -1,0 +1,57 @@
+# Справочник предоставлен Сергеем Солощенко 2026-09-07.
+# Фамилии и роли — контекст для анализа, а не достаточное основание
+# включать письмо в отчёт. Релевантность определяется по содержанию.
+# Email-адреса и полные имена, которых нет в исходных данных, не угадывать.
+project_manager:
+  name: Солощенко Сергей Сергеевич
+  organization: Спектрум Холдинг
+  role: Менеджер проекта
+  report_owner: true
+
+groups:
+  - organization: Спектрум Холдинг
+    relationship: Команда технического заказчика
+    participants:
+      - {name: Балабанова, role: Координатор}
+      - {name: Следь, role: Менеджер по строительству}
+      - {name: Кашапов, role: Архитектор технического заказчика}
+      - {name: Полников, role: ГИП}
+      - {name: Двойных, role: Координатор}
+      - {name: Бондарь, role: Технолог}
+      - {name: Кузнецова, role: Кост-менеджер}
+      - {name: Болкунов, role: Директор проекта}
+  - organization: ООО «Морской порт Геленджик»
+    relationship: Заказчик
+    participants:
+      - {name: Чегуз}
+      - {name: Панов}
+      - {name: Лозинский}
+  - organization: null
+    relationship: Инвестор
+    participants:
+      - {name: Иванов}
+      - {name: Ильина}
+      - {name: Телегин}
+      - {name: Фаизов}
+  - organization: Dusit
+    aliases: [Дусит]
+    relationship: Гостиничный оператор
+    participants:
+      - {name: Антони, role: Руководитель Дамлы}
+      - {name: Дамла, role: Технический менеджер}
+      - {name: Каролина, role: Работа по договору HMA}
+  - organization: Dyer
+    aliases: [Даер]
+    relationship: Архитектор проекта
+    participants:
+      - {name: Попова}
+      - {name: Тамас Дейлингер}
+      - {name: Тамас Хузгар}
+  - organization: null
+    relationship: Юридический консультант
+    participants:
+      - {name: Арина Довженко, role: Юридическое сопровождение договоров с Dusit}
+  - organization: ИСК
+    relationship: Консультант по закупкам
+    participants:
+      - {name: Елизавета Шмиткова, role: Консультант по закупкам}

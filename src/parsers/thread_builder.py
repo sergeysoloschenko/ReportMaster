@@ -92,12 +92,19 @@ class ThreadBuilder:
         if not messages:
             return []
         
-        # Group messages by normalized subject
-        subject_groups = self._group_by_subject(messages)
-        
-        # Create threads
         threads = []
         thread_counter = 1
+
+        linked_groups, remaining_messages = self._group_by_message_headers(messages)
+        for linked_group in linked_groups:
+            thread = EmailThread(f"THREAD_{thread_counter:03d}")
+            for msg in linked_group:
+                thread.add_message(msg)
+            threads.append(thread)
+            thread_counter += 1
+
+        # Group remaining messages by normalized subject
+        subject_groups = self._group_by_subject(remaining_messages)
         
         for subject_key, msgs in subject_groups.items():
             # Split by participant overlap and time gaps
@@ -116,6 +123,64 @@ class ThreadBuilder:
         self.logger.info(f"Created {len(threads)} threads")
         
         return threads
+
+    def _group_by_message_headers(self, messages: List[EmailMessage]) -> tuple[List[List[EmailMessage]], List[EmailMessage]]:
+        """
+        Group messages by explicit RFC-style threading headers before heuristics.
+        Messages without present links stay available for subject/participant grouping.
+        """
+        if len(messages) <= 1:
+            return [], messages
+
+        parent = list(range(len(messages)))
+
+        def find(idx: int) -> int:
+            while parent[idx] != idx:
+                parent[idx] = parent[parent[idx]]
+                idx = parent[idx]
+            return idx
+
+        def union(left: int, right: int) -> None:
+            root_left = find(left)
+            root_right = find(right)
+            if root_left != root_right:
+                parent[root_right] = root_left
+
+        by_message_id = {}
+        for idx, message in enumerate(messages):
+            message_id = (getattr(message, "message_id", "") or "").strip().lower()
+            if message_id:
+                by_message_id[message_id] = idx
+
+        for idx, message in enumerate(messages):
+            related_ids = []
+            in_reply_to = (getattr(message, "in_reply_to", "") or "").strip().lower()
+            if in_reply_to:
+                related_ids.append(in_reply_to)
+            related_ids.extend(
+                ref.strip().lower()
+                for ref in getattr(message, "references", []) or []
+                if ref and ref.strip()
+            )
+
+            for related_id in related_ids:
+                related_idx = by_message_id.get(related_id)
+                if related_idx is not None:
+                    union(idx, related_idx)
+
+        grouped = {}
+        for idx, message in enumerate(messages):
+            grouped.setdefault(find(idx), []).append(message)
+
+        linked_groups = []
+        remaining = []
+        for group in grouped.values():
+            if len(group) > 1:
+                linked_groups.append(group)
+            else:
+                remaining.extend(group)
+
+        return linked_groups, remaining
     
     def _group_by_subject(self, messages: List[EmailMessage]) -> Dict[str, List[EmailMessage]]:
         """Group messages by normalized subject"""
@@ -143,9 +208,17 @@ class ThreadBuilder:
         subject = subject.lower()
         
         # Remove common prefixes
-        prefixes = [r'^re:', r'^fw:', r'^fwd:', r'^aw:', r'^\[.*?\]']
-        for prefix in prefixes:
-            subject = re.sub(prefix, '', subject, flags=re.IGNORECASE)
+        prefixes = [
+            r'^(re|fw|fwd|aw)\s*:',
+            r'^(ответ|отв|пересл|переслано|перенаправлено)\s*:',
+            r'^\[.*?\]',
+        ]
+        changed = True
+        while changed:
+            before = subject
+            for prefix in prefixes:
+                subject = re.sub(prefix, '', subject, flags=re.IGNORECASE).strip()
+            changed = before != subject
         
         # Remove extra whitespace
         subject = ' '.join(subject.split())

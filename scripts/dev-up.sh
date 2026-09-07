@@ -6,20 +6,23 @@ cd "$ROOT_DIR"
 
 if [[ ! -f ".env" ]]; then
   cp .env.example .env
-  echo "Created .env from .env.example. Set ANTHROPIC_API_KEY before real runs."
+  echo "Created .env from .env.example. Configure ChatGPT login and Exchange password before real runs."
 fi
 
-if [[ -x ".venv/bin/python" ]]; then
+if [[ -x ".venv-sdk/bin/python" ]]; then
+  VENV_BIN=".venv-sdk/bin"
+elif [[ -x ".venv/bin/python" ]]; then
   VENV_BIN=".venv/bin"
 elif [[ -x "venv/bin/python" ]]; then
   VENV_BIN="venv/bin"
 else
-  python3 -m venv .venv
+  python3.11 -m venv .venv
   VENV_BIN=".venv/bin"
 fi
 
-if [[ ! -x "$VENV_BIN/uvicorn" ]]; then
-  "$VENV_BIN/pip" install -r requirements.txt
+"$VENV_BIN/python" -c 'import sys; assert sys.version_info >= (3, 11), "ReportMaster requires Python 3.11+"'
+if ! "$VENV_BIN/python" -c 'import uvicorn, openai_codex, requests_ntlm' >/dev/null 2>&1; then
+  "$VENV_BIN/python" -m pip install -r requirements.txt
 fi
 
 if [[ ! -d "webapp/frontend/node_modules" ]]; then
@@ -39,7 +42,7 @@ if lsof -nP -iTCP:5173 -sTCP:LISTEN >/dev/null 2>&1; then
 fi
 
 echo "Starting backend on http://localhost:8000 ..."
-"$VENV_BIN/uvicorn" src.webapp.backend.app:app --host 0.0.0.0 --port 8000 > .run/backend.log 2>&1 &
+"$VENV_BIN/python" -m uvicorn src.webapp.backend.app:app --host 0.0.0.0 --port 8000 > .run/backend.log 2>&1 &
 BACK_PID=$!
 echo "$BACK_PID" > .run/backend.pid
 
