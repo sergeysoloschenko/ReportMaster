@@ -70,12 +70,21 @@ class EWSClient:
                 raise RuntimeError(
                     "Exchange отклонил NTLM-вход. Проверьте пароль и права почтового ящика."
                 )
-            if response.status_code != 200:
+            if response.status_code not in (200, 500):
                 raise RuntimeError(f"Exchange: HTTP {response.status_code}")
             if b"<!DOCTYPE" in response.content or b"<!ENTITY" in response.content:
                 raise RuntimeError("Недопустимый XML Exchange")
-            root = ET.fromstring(response.content)
-            codes = [n.text for n in root.findall(".//m:ResponseCode", NS)]
+            try:
+                root = ET.fromstring(response.content)
+            except ET.ParseError as exc:
+                raise RuntimeError(
+                    f"Exchange: HTTP {response.status_code}, некорректный XML"
+                ) from exc
+            codes = [
+                n.text
+                for n in root.iter()
+                if n.tag.rsplit("}", 1)[-1] == "ResponseCode"
+            ]
             if "ErrorServerBusy" in codes and attempt < 3:
                 time.sleep(min(2**attempt, 8))
                 continue
@@ -154,7 +163,7 @@ class EWSClient:
             "message:ToRecipients",
             "message:CcRecipients",
             "message:InternetMessageId",
-            "message:InReplyTo",
+            "item:InReplyTo",
         ]
         shape = "".join(f'<t:FieldURI FieldURI="{f}"/>' for f in fields)
         root = self.call(

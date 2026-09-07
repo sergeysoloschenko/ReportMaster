@@ -347,3 +347,39 @@ def test_sessions_survive_restart_without_plaintext_tokens(tmp_path, monkeypatch
     assert b"secret-session-token" not in second.path.read_bytes()
     second.discard("secret-session-token")
     assert "secret-session-token" not in first
+
+
+def test_ews_soap_fault_http500_keeps_exchange_code():
+    from types import SimpleNamespace
+
+    response = SimpleNamespace(
+        status_code=500,
+        content=(
+            f'<s:Envelope xmlns:s="{NS["s"]}" xmlns:e="http://schemas.microsoft.com/exchange/services/2006/errors">'
+            "<s:Body><s:Fault><faultstring>The request is invalid.</faultstring>"
+            "<detail><e:ResponseCode>ErrorInvalidRequest</e:ResponseCode></detail>"
+            "</s:Fault></s:Body></s:Envelope>"
+        ).encode(),
+    )
+    client = EWSClient(session=SimpleNamespace(post=lambda *a, **k: response))
+    with pytest.raises(RuntimeError, match="ErrorInvalidRequest"):
+        client.call("<m:GetItem/>")
+
+
+def test_ews_reply_reference_uses_item_property():
+    client = EWSClient(session=object())
+
+    def call(xml):
+        assert 'FieldURI="item:InReplyTo"' in xml
+        assert 'FieldURI="message:InReplyTo"' not in xml
+        return ET.fromstring(
+            f'<m:R xmlns:m="{NS["m"]}" xmlns:t="{NS["t"]}"><m:Items><t:Message>'
+            '<t:ItemId Id="item1"/><t:InReplyTo>parent-message</t:InReplyTo>'
+            "</t:Message></m:Items></m:R>"
+        )
+
+    client.call = call
+    assert (
+        client.get_items(["item1"], "inbox", False)[0]["in_reply_to"]
+        == "parent-message"
+    )
