@@ -972,7 +972,10 @@ class CodexCLIClient(GigaChatAPIClient):
         self._cache = self._load_cache()
         self.http = None
 
-        if shutil.which(self.command):
+        if getattr(self, "_sdk_transport", False):
+            self.client = self
+            self.logger.info("Codex SDK client initialized")
+        elif shutil.which(self.command):
             self.client = self
             self.logger.info("Codex CLI client initialized with command '%s'", self.command)
         else:
@@ -1133,8 +1136,38 @@ Rules:
 {prompt}"""
 
 
-ClaudeAPIClient = CodexCLIClient
-ReportMasterLLMClient = CodexCLIClient
+class CodexSDKClient(CodexCLIClient):
+    """Legacy uploaded-file workflows use the same official SDK transport."""
+
+    _sdk_transport = True
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.client = self
+
+    def _cache_key(self, kind: str, payload: Dict) -> str:
+        import os
+        from src.reporting.sdk import MODELS
+        profile = {task: (os.getenv(f"REPORT_MODEL_{task.upper()}", model),
+                          os.getenv(f"REPORT_EFFORT_{task.upper()}", effort))
+                   for task, (model, effort) in MODELS.items()}
+        return super()._cache_key("sdk_v1_" + kind, {"profile": profile, "payload": payload})
+
+    def _chat_completion(self, prompt, model, max_tokens, task_type="summarization"):
+        from src.reporting.sdk import SDKWorker
+        task = {"triage": "triage", "thread_insight": "extract"}.get(task_type, "compose")
+        with SDKWorker(log=lambda message: self._emit_log(message)) as worker:
+            value = worker.ask(task, 'Выполни задание из поля prompt. Верни JSON с одним полем answer, '
+                'содержащим полный ответ строкой в формате, требуемом заданием.', {"prompt": prompt})
+            self._usage["codex_runs"] += worker.usage["runs"]
+            self._usage["prompt_tokens"] += worker.usage["input_tokens"]
+            self._usage["completion_tokens"] += worker.usage["output_tokens"]
+            self._usage["total_tokens"] += worker.usage["input_tokens"] + worker.usage["output_tokens"]
+            return value["answer"]
+
+
+ClaudeAPIClient = CodexSDKClient
+ReportMasterLLMClient = CodexSDKClient
 
 
 if __name__ == "__main__":

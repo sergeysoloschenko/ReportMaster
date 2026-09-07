@@ -1,3 +1,4 @@
+import Monthly from "./Monthly";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { attachmentsUrl, createJob, getAuthStatus, getJob, login, logout, reportUrl } from "./api";
 
@@ -177,12 +178,15 @@ function App() {
             Sign out
           </button>
         </div>
-        <h1>ReportMaster Web Console</h1>
+        <h1>ReportMaster</h1>
         <p className="subtitle">
-          Upload monthly Outlook emails or run prompt-based analysis on mixed source files.
+          Ежемесячные отчёты по отелю и апартаментам: задачи, результаты и риски.
         </p>
       </section>
 
+      <Monthly />
+
+      <details><summary>Анализ загруженных файлов</summary>
       <section className="grid">
         <form className="card" onSubmit={onSubmit}>
           <h2>1. Upload</h2>
@@ -315,6 +319,7 @@ function App() {
           </div>
         </section>
       </section>
+      </details>
     </main>
   );
 }

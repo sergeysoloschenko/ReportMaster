@@ -1,0 +1,14 @@
+/.git
+/.codex
+/.agents
+/.env
+/.venv
+/.venv-sdk
+/venv
+/data
+/logs
+/.run
+**/__pycache__
+**/.pytest_cache
+**/node_modules
+/webapp/frontend/dist

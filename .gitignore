@@ -45,3 +45,7 @@ data/cache/*
 !data/cache/.gitkeep
 src/data/output/*
 webapp/frontend/dist/
+.venv-sdk/
+data/history/
+data/mail/
+data/reference/

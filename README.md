@@ -1,4 +1,10 @@
-# ReportMaster WebApp
+# ReportMaster
+
+Основной сценарий — ежемесячный отчёт по отелю и апартаментам из Exchange EWS с историей задач и рисков. Codex подключён через официальный Python SDK с ChatGPT-авторизацией. Исходные отчёты и черновики проверяются и утверждаются в интерфейсе; Word содержит только таблицы из образца.
+
+Подробности, настройка NTLM, модели и ограничения: [docs/monthly-reporting.md](docs/monthly-reporting.md). Требуется Python 3.11+.
+
+## Дополнительные режимы загрузки файлов
 
 ReportMaster processes Outlook `.msg` emails and supporting documents, deduplicates repeated content, groups threads, generates Codex-based summaries, and builds Word reports.
 
@@ -11,7 +17,7 @@ ReportMaster is an internal reporting system that:
 - groups messages into discussion threads
 - classifies default monthly email reports into fixed business directions
 - supports custom prompt-based analysis for mixed source files
-- runs analysis through a private Codex CLI worker
+- runs analysis through the official Codex Python SDK
 - generates a paste-ready five-column Word fragment based on the approved contract report template
 - downloads public document links from email bodies into `Attachments`; links that cannot be downloaded are retained in the report text
 
@@ -32,7 +38,7 @@ The monthly DOCX contains only the template table fragment: no title page, gener
 Monthly mode is fail-fast: if Codex is missing, logged out, or returns an unusable result, the job fails with an actionable error instead of emitting placeholder text. Re-authorize the production worker with:
 
 ```bash
-docker compose exec backend codex login --device-auth
+docker compose exec backend python scripts/codex_login.py
 ```
 
 ### Custom analysis
@@ -79,7 +85,7 @@ make dev-down
 ### 1) Python backend
 
 ```bash
-python -m venv .venv
+python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
@@ -141,7 +147,7 @@ docker compose up -d --build
 4. Sign in Codex inside the backend container once:
 
 ```bash
-docker compose exec backend codex login --device-auth
+docker compose exec backend python scripts/codex_login.py
 ```
 
 Follow the printed browser URL and enter the device code with your ChatGPT Pro account. The login cache is stored in the mounted `./.codex` folder and survives container rebuilds. Treat this folder like a secret.
@@ -160,7 +166,7 @@ The web UI asks for `APP_PASSWORD` before uploads, job status, reports, or attac
 - Custom analysis is capped by `MAX_CUSTOM_SOURCES` and `MAX_CUSTOM_SOURCE_CHARS` before LLM analysis
 - Monthly reports use staged Codex reasoning: low for relevance triage, medium for thread cards, high for direction summaries
 - LLM analysis results are cached in `CACHE_FOLDER` by content hash to avoid repeated Codex runs
-- Codex jobs run sequentially by default (`JOB_MAX_WORKERS=1`) to avoid competing with one user's ChatGPT/Codex limits
+- Monthly Exchange jobs run sequentially by default (`JOB_MAX_WORKERS=1`) to avoid competing with one user's ChatGPT/Codex limits
 
 ## Security/Quality Improvements Implemented
 

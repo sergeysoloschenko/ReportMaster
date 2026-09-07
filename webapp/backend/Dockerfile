@@ -7,14 +7,15 @@ ENV PYTHONUNBUFFERED=1
 
 COPY requirements.txt /app/requirements.txt
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates git nodejs npm \
-    && npm install -g @openai/codex \
+    && apt-get install -y --no-install-recommends ca-certificates git \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
 COPY src /app/src
 COPY config /app/config
+COPY scripts/codex_login.py /app/scripts/codex_login.py
+COPY scripts/setup_ews_password.py /app/scripts/setup_ews_password.py
 COPY config/.env.example /app/.env
 
 ENV CODEX_HOME=/root/.codex

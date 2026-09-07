@@ -20,7 +20,8 @@ app = FastAPI(title="ReportMaster API", version="1.1.0")
 job_manager = JobManager()
 APP_PASSWORD = os.getenv("APP_PASSWORD", "").strip()
 SESSION_COOKIE = "reportmaster_session"
-SESSION_TOKENS = set()
+from src.reporting.sessions import Sessions
+SESSION_TOKENS = Sessions()
 ALLOWED_ORIGINS = [
     origin.strip()
     for origin in os.getenv("APP_ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",")
@@ -188,3 +189,7 @@ def download_attachments(job_id: str, _: bool = Depends(require_auth)):
 async def unhandled_exception_handler(_, exc: Exception):
     logger.exception("Unhandled API error: %s", exc)
     return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
+# Persistent Exchange reporting and approved monthly history.
+from src.reporting.routes import router as monthly_router
+app.include_router(monthly_router(require_auth))

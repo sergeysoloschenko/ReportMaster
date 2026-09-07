@@ -346,3 +346,20 @@ textarea {
     gap: 2px;
   }
 }
+.monthly { margin: 24px 0; }
+.monthlyActions, .historyList { display:flex; flex-wrap:wrap; gap:12px; align-items:center; margin:16px 0; }
+.monthlyActions .field { margin:0; }
+.reportItem { border:1px solid #d6dce5; border-radius:12px; padding:18px; margin:16px 0; }
+.monthly textarea, .monthly select, .monthly input:not([type=checkbox]) { width:100%; padding:10px; border:1px solid #c4cdd9; border-radius:6px; font:inherit; }
+.monthly details { margin:16px 0; }
+.monthly summary { cursor:pointer; font-weight:600; }
+.monthlyLog { white-space:pre-wrap; max-height:260px; overflow:auto; }
+.sourceDialog { position:fixed; inset:5vh 5vw; width:90vw; max-width:1000px; max-height:90vh; overflow:auto; padding:24px; border:1px solid #ccd; border-radius:12px; z-index:20; box-shadow:0 0 0 100vmax #0008; }
+.sourceDialog pre { white-space:pre-wrap; overflow-wrap:anywhere; }
+.monthly select, .monthly input:not([type=checkbox]) { background:#0f1620; color:var(--text); border-color:var(--border); color-scheme:dark; }
+.monthly input[type=checkbox] { width:auto; accent-color:var(--brand); }
+.sourceDialog { background:var(--panel); color:var(--text); }
+.sourceDialog a { color:#7ad7ff; }
+.monthly h3 { margin:22px 0 14px; }
+.monthly .reportItem { border-color:var(--border); }
+.monthly .reportItem summary { line-height:1.5; }
