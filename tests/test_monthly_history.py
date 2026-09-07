@@ -306,6 +306,10 @@ def test_complete_monthly_pipeline_and_export(tmp_path, monkeypatch):
     assert len(output.tables) == 2
     assert "Планировка согласована оператором" in output.tables[0].rows[2].cells[1].text
     assert list(Path(result["attachments_path"]).rglob("*.pdf"))
+    attachment_item = result["tasks"][0]
+    expected_folder = (Path(result["attachments_path"]) / "Задачи"
+                       / attachment_item["section"] / attachment_item["title"])
+    assert list(expected_folder.glob("*.pdf"))
     client = TestClient(FastAPI())
     app = FastAPI()
     app.include_router(router(lambda: True, service))

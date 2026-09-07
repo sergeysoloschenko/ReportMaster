@@ -29,6 +29,17 @@ def safe_name(value):
     )
 
 
+def report_folder_name(value):
+    # Keep report wording and punctuation; replace only unsafe path characters.
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", str(value)).strip().rstrip(".")
+    if name in ("", ".", ".."):
+        name = "Пункт"
+    if len(name.encode("utf-8")) > 240:
+        suffix = "…" + digest(str(value))[:8]
+        name = name.encode("utf-8")[:225].decode("utf-8", errors="ignore") + suffix
+    return name
+
+
 def service_image(att):
     image = Path(att["name"]).suffix.lower() in {
         ".png",
@@ -664,6 +675,16 @@ attachment_ids выбирай из источников; включай толь
             report["reference"],
             directory / f"Report_{report['period']}.docx",
         )
+        attachments = self.export_attachments(report, directory)
+        return self.store.update(
+            report["id"],
+            expected_revision=report["revision"],
+            report_path=str(path),
+            attachments_path=str(attachments),
+            document_content_hash=content_hash(report),
+        )
+
+    def export_attachments(self, report, directory):
         attachments = directory / "Attachments"
         attachments.mkdir(parents=True, exist_ok=True)
         manifest = []
@@ -674,7 +695,8 @@ attachment_ids выбирай из источников; включай толь
                 target = (
                     attachments
                     / ("Задачи" if kind == "tasks" else "Риски")
-                    / safe_name(item["id"])
+                    / report_folder_name(item.get("section", item.get("number")))
+                    / report_folder_name(item["title"])
                 )
                 selected = set(item["attachment_ids"])
                 entries = []
@@ -705,6 +727,7 @@ attachment_ids выбирай из источников; включай толь
                         "id": item["id"],
                         "title": item["title"],
                         "section": item.get("section", item.get("number")),
+                        "folder": str(target.relative_to(attachments)),
                         "documents": entries,
                     }
                 )
@@ -713,7 +736,8 @@ attachment_ids выбирай из источников; включай толь
         )
         (attachments / "index.txt").write_text(
             "\n\n".join(
-                x["title"]
+                x["section"] + " — " + x["title"]
+                + "\nПапка: " + x["folder"]
                 + "\n"
                 + "\n".join(
                     f"{a['name']}: {a.get('file') or a.get('url') or a.get('warning')}"
@@ -722,10 +746,4 @@ attachment_ids выбирай из источников; включай толь
                 for x in manifest
             )
         )
-        return self.store.update(
-            report["id"],
-            expected_revision=report["revision"],
-            report_path=str(path),
-            attachments_path=str(attachments),
-            document_content_hash=content_hash(report),
-        )
+        return attachments
