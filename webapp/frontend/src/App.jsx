@@ -136,9 +136,9 @@ function App() {
     return (
       <main className="page authPage">
         <section className="card authCard">
-          <p className="eyebrow">Private Deployment</p>
+          <p className="eyebrow">Проектный офис</p>
           <h1>ReportMaster</h1>
-          <p className="subtitle">Checking session...</p>
+          <p className="subtitle">Проверяем вход…</p>
         </section>
       </main>
     );
@@ -148,11 +148,11 @@ function App() {
     return (
       <main className="page authPage">
         <form className="card authCard" onSubmit={onLogin}>
-          <p className="eyebrow">Private Deployment</p>
+          <p className="eyebrow">Проектный офис</p>
           <h1>ReportMaster</h1>
-          <p className="subtitle">Enter the application password.</p>
+          <p className="subtitle">Войдите в рабочее пространство.</p>
           <label className="field">
-            <span>Password</span>
+            <span>Пароль приложения</span>
             <input
               type="password"
               autoComplete="current-password"
@@ -161,7 +161,7 @@ function App() {
             />
           </label>
           <button className="btn" disabled={!password}>
-            Sign in
+            Войти
           </button>
           {authError && <p className="error">{authError}</p>}
         </form>
@@ -171,22 +171,16 @@ function App() {
 
   return (
     <main className="page">
-      <section className="card hero">
-        <div className="heroTop">
-          <p className="eyebrow">Private Deployment</p>
-          <button className="btn ghost small" type="button" onClick={onLogout}>
-            Sign out
-          </button>
-        </div>
-        <h1>ReportMaster</h1>
-        <p className="subtitle">
-          Ежемесячные отчёты по отелю и апартаментам: задачи, результаты и риски.
-        </p>
-      </section>
-
+      <aside className="workspaceNav">
+        <a className="wordmark" href="#"><span className="brandMark">R</span> ReportMaster<span className="edition">PROJECT OFFICE</span></a>
+        <div className="navProject"><span className="eyebrow">Рабочее пространство</span><strong>Отель и<br/>апартаменты</strong><span>Спектрум Холдинг</span></div>
+        <a className="navActive" href="#reports"><span>▤</span> Отчёты <span className="navArrow">↗</span></a>
+        <a href="#file-analysis">↥ &nbsp; Анализ файлов</a>
+        <div className="navBottom"><div className="avatar">СС</div><div><strong>Сергей Солощенко</strong><small>Менеджер проекта</small></div><button aria-label="Выйти из приложения" title="Выйти" onClick={onLogout}>↗</button></div>
+      </aside>
       <Monthly />
 
-      <details><summary>Анализ загруженных файлов</summary>
+      <details id="file-analysis" className="legacyTools"><summary>Анализ загруженных файлов <span>Дополнительный инструмент</span></summary>
       <section className="grid">
         <form className="card" onSubmit={onSubmit}>
           <h2>1. Upload</h2>
