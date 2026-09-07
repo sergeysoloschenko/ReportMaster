@@ -41,6 +41,8 @@ class ReportStore:
                     try:
                         os.kill(pid, 0)
                         continue
+                    except PermissionError:
+                        continue  # Process exists but belongs to another security context.
                     except ProcessLookupError:
                         pass
                 data.update(

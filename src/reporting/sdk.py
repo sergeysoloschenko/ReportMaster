@@ -25,6 +25,39 @@ INSTRUCTIONS = """Ты аналитик технического заказчи�
 Не описывай процесс чтения писем. Не обещай будущие действия как выполненные."""
 
 
+def alias_sources(payload):
+    """Use short exact references in model context; keep persistent IDs outside it."""
+    mapping = {}
+
+    def collect(value, key=""):
+        if isinstance(value, dict):
+            for k, v in value.items():
+                collect(v, k)
+        elif isinstance(value, list):
+            for v in value:
+                collect(v, key)
+        elif (
+            isinstance(value, str)
+            and value
+            and (key in ("id", "previous_id") or key.endswith("_ids"))
+        ):
+            if value not in mapping:
+                mapping[value] = f"ref{len(mapping) + 1}"
+
+    collect(payload)
+    return mapping
+
+
+def map_references(value, mapping):
+    if isinstance(value, dict):
+        return {mapping.get(k, k): map_references(v, mapping) for k, v in value.items()}
+    if isinstance(value, list):
+        return [map_references(v, mapping) for v in value]
+    if isinstance(value, str):
+        return mapping.get(value, value)
+    return value
+
+
 class SDKWorker:
     def __init__(self, store=None, log=None):
         self.store = store
@@ -82,10 +115,13 @@ class SDKWorker:
             raise RuntimeError(
                 f"Модель {model} недоступна в аккаунте. Измените REPORT_MODEL_{task.upper()}."
             )
+        aliases = alias_sources(payload)
+        model_payload = map_references(payload, aliases)
+        model_schema = map_references(schema, aliases)
         prompt = (
             instruction
             + "\nИСХОДНЫЕ ДАННЫЕ JSON:\n"
-            + json.dumps(payload, ensure_ascii=False)
+            + json.dumps(model_payload, ensure_ascii=False)
         )
         if len(prompt) > 180000:
             raise ValueError(
@@ -93,7 +129,7 @@ class SDKWorker:
             )
         key = hashlib.sha256(
             json.dumps(
-                [INSTRUCTIONS, model, effort, prompt, schema],
+                [INSTRUCTIONS, model, effort, prompt, schema, aliases],
                 ensure_ascii=False,
                 sort_keys=True,
             ).encode()
@@ -116,7 +152,7 @@ class SDKWorker:
         timer.start()
         try:
             result = thread.run(
-                prompt, effort=ReasoningEffort(effort), output_schema=schema
+                prompt, effort=ReasoningEffort(effort), output_schema=model_schema
             )
         finally:
             timer.cancel()
@@ -133,6 +169,7 @@ class SDKWorker:
         value = json.loads(raw)
         if not isinstance(value, dict):
             raise ValueError("Codex вернул некорректную структуру")
+        value = map_references(value, {v: k for k, v in aliases.items()})
         self.usage["runs"] += 1
         if result.usage:
             usage = result.usage.model_dump()

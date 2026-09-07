@@ -259,9 +259,7 @@ def test_complete_monthly_pipeline_and_export(tmp_path, monkeypatch):
 
         def ask(self, stage, instruction, payload, schema=None):
             if stage == "triage":
-                return {
-                    "decisions": [{"id": "m1", "include": True, "reason": "Approval"}]
-                }
+                return {"decisions": {"m1": {"include": True, "reason": "Approval"}}}
             if stage == "extract":
                 return {
                     "facts": [
@@ -383,3 +381,33 @@ def test_ews_reply_reference_uses_item_property():
         client.get_items(["item1"], "inbox", False)[0]["in_reply_to"]
         == "parent-message"
     )
+
+
+def test_model_source_aliases_round_trip():
+    from src.reporting.sdk import alias_sources, map_references
+
+    source_id = "a" * 64
+    payload = {
+        "messages": [{"id": source_id, "body": "Unchanged text"}],
+        "evidence_ids": [source_id],
+    }
+    aliases = alias_sources(payload)
+    short = map_references(payload, aliases)
+    assert short["messages"][0]["id"] == "ref1"
+    assert short["evidence_ids"] == ["ref1"]
+    assert map_references(short, {v: k for k, v in aliases.items()}) == payload
+    schema = {"required": [source_id], "properties": {source_id: {"type": "boolean"}}}
+    assert map_references(schema, aliases)["required"] == ["ref1"]
+    assert "ref1" in map_references(schema, aliases)["properties"]
+
+
+def test_live_worker_permission_error_does_not_mark_failed(tmp_path, monkeypatch):
+    path = tmp_path / "history.sqlite3"
+    store = ReportStore(path)
+    report = store.create("2026-08", worker_pid=12345)
+
+    def inaccessible(*args):
+        raise PermissionError("different security context")
+
+    monkeypatch.setattr("src.reporting.store.os.kill", inaccessible)
+    assert ReportStore(path).get(report["id"])["status"] == "queued"

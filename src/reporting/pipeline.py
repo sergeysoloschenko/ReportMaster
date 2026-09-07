@@ -307,15 +307,45 @@ include_in_report=true. Для отсутствующих сведений ис�
                         """Для каждого уникального id письма реши релевантность зоне ответственности.
 Ищи также продолжение задач/рисков прошлого периода, включая переоткрытие завершённых.
 При сомнении включай. Не исключай короткое письмо с содержательным вложением.
-Верни {"decisions":[{"id":"id письма","include":true,"reason":"основание"}]}.
+Верни объект decisions с обязательным ключом для каждого уникального id письма:
+{"decisions":{"id письма":{"include":true,"reason":"основание"}}}.
 Письма могут быть частями длинного сообщения; оцени предоставленную часть.""",
                         {
                             "messages": batch,
                             "history": history_titles,
                             "participants": self.participants,
                         },
+                        {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "required": ["decisions"],
+                            "properties": {
+                                "decisions": {
+                                    "type": "object",
+                                    "additionalProperties": False,
+                                    "required": list(
+                                        dict.fromkeys(x["id"] for x in batch)
+                                    ),
+                                    "properties": {
+                                        x["id"]: {
+                                            "type": "object",
+                                            "additionalProperties": False,
+                                            "required": ["include", "reason"],
+                                            "properties": {
+                                                "include": {"type": "boolean"},
+                                                "reason": {"type": "string"},
+                                            },
+                                        }
+                                        for x in batch
+                                    },
+                                }
+                            },
+                        },
                     )
-                    found = result.get("decisions", [])
+                    found = [
+                        dict(value, id=key)
+                        for key, value in result["decisions"].items()
+                    ]
                     expected = {x["id"] for x in batch}
                     if {x.get("id") for x in found} != expected or any(
                         type(x.get("include")) is not bool for x in found
@@ -342,6 +372,8 @@ include_in_report=true. Для отсутствующих сведений ис�
                     result = worker.ask(
                         "extract",
                         """Извлеки конкретные факты, действия, решения, незакрытые вопросы и риски.
+Учитывай дату самого события: цитата старого письма внутри августовского не является новым событием.
+События вне указанного period используй только как контекст; включай их лишь при подтверждённом развитии в новом периоде.
 Для каждого факта укажи evidence_ids (id писем), attachment_ids только содержательных относящихся к факту документов,
 section (4.1 HMA, 4.2 Dusit техническое, 4.3 консультанты/закупки, 4.4 Dyer, 4.5 надзор/координация),
 text (факт, дата и статус). Сохрани неопределённости и противоречия.
@@ -355,6 +387,7 @@ text (факт, дата и статус). Сохрани неопределён
                             ],
                             "participants": self.participants,
                             "previous_tasks": history_titles,
+                            "period": report["period"],
                         },
                     )
                     for fact in result.get("facts", []):
