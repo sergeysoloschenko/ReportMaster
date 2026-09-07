@@ -59,6 +59,10 @@ EWS читает Inbox, Sent Items и их подпапки. Письма, пе�
 
 Без новых писем задача/риск сохраняет подтверждённый статус и исключается из повторной таблицы. Активные пункты без обновлений отображаются в предупреждениях. Снятие риска и завершение задачи требуют текущего источника. Релевантность определяется содержанием, а не только фамилиями участников.
 
-## Проверено при реализации
+## Validation and current state
 
-40 автоматических тестов, включая синтетический цикл от EWS до утверждения DOCX/ZIP; production-сборка Vite. Реальная ChatGPT-авторизация SDK и доступность Luna/Terra подтверждены. Luna проверена на четырёх синтетических письмах; исходный июльский DOCX разобран Terra. NTLM, FindFolder, FindItem и GetItem проверены на реальном ящике: за август получены все 287 писем из обследованных папок (240 входящих, 47 отправленных). Генерация августовских таблиц ожидает утверждения исходного июльского черновика.
+47 tests pass, including the synthetic EWS-to-DOCX/ZIP approval flow. Vite production build passes. Live ChatGPT SDK authentication, Luna/Terra availability and Luna relevance checks succeeded. Exchange returned all 287 August messages (240 incoming, 47 sent) from the configured folders.
+
+The user approved July. The reviewed August draft contains 46 items across five sections and 6 risks, based on 184 selected messages including conversation context. All 13 pages were inspected from Microsoft Word print output. The authenticated DOCX and ZIP downloads were checked; the ZIP contains 81 entries and passes integrity verification. Deployment still requires server SSH details.
+
+The first real run exposed mixed document/mail references and duplicate continuations; the main pipeline now normalizes known attachment references to their owning messages and merges continuations. Existing risk numbers retain their identity and rank. Repeated links are downloaded once per run, including failures. Extraction batches allow 110000 characters; large fact sets are compacted before synthesis while validating evidence references. The DOCX exporter uses real paragraphs to avoid stretched final lines in justified text.

@@ -19,12 +19,13 @@ def replace(cell, text):
         else None
     )
     cell.text = ""
-    p = cell.paragraphs[0]
-    if ppr is not None:
-        p._p.insert(0, ppr)
-    run = p.add_run(str(text or ""))
-    if rpr is not None:
-        run._r.insert(0, rpr)
+    for index, line in enumerate(str(text or "").split("\n")):
+        p = cell.paragraphs[0] if index == 0 else cell.add_paragraph()
+        if ppr is not None:
+            p._p.insert(0, deepcopy(ppr))
+        run = p.add_run(line)
+        if rpr is not None:
+            run._r.insert(0, deepcopy(rpr))
 
 
 def content_hash(report):

@@ -97,6 +97,28 @@ def chunks(messages, limit=42000):
         yield batch
 
 
+def bind_attachment_sources(findings, messages):
+    """A selected document also cites its actual owning message, never a guessed one."""
+    owners = {
+        a["id"]: m["id"]
+        for m in messages
+        for a in m.get("attachments", [])
+        if a.get("id")
+    }
+    for kind in ("tasks", "risks"):
+        for item in findings[kind]:
+            # A model may cite a document reference where a mail reference is required.
+            item["evidence_ids"] = list(
+                dict.fromkeys(owners.get(sid, sid) for sid in item["evidence_ids"])
+            )
+            for aid in item.get("attachment_ids", []):
+                if aid not in owners:
+                    raise ValueError("Выбрано несуществующее вложение")
+                if owners[aid] not in item["evidence_ids"]:
+                    item["evidence_ids"].append(owners[aid])
+    return findings
+
+
 class MonthlyService:
     def __init__(self, root=None):
         self.root = Path(root or os.getenv("REPORTMASTER_DATA", "data")).resolve()
@@ -276,6 +298,84 @@ include_in_report=true. Для отсутствующих сведений ис�
                 items.append(item)
             message["attachments"] = items
             self.store.save_message(message)
+
+    def merge_continuations(self, findings, previous, worker, period):
+        for kind in ("tasks", "risks"):
+            old = {x["id"]: x for x in previous[kind]}
+            if kind == "risks":
+                for item in findings[kind]:
+                    if item.get("previous_id") is None:
+                        matches = [
+                            x for x in previous[kind] if x["number"] == item["number"]
+                        ]
+                        if len(matches) == 1:
+                            item["previous_id"] = matches[0]["id"]
+            if kind == "risks":
+                for item in findings[kind]:
+                    if not re.search(
+                        r"ранг\s*(?:риска)?\s*:",
+                        item["response"] + " " + item.get("characteristics", ""),
+                        re.I,
+                    ):
+                        source = old.get(item.get("previous_id"), {})
+                        rank = re.search(
+                            r"Ранг\s*(?:риска)?\s*:\s*([^\n.]+)",
+                            source.get("response", ""),
+                            re.I,
+                        )
+                        item["response"] = (
+                            "Ранг риска: " + rank.group(1).strip() + ". "
+                            if rank
+                            else "Ранг риска: требует оценки. "
+                        ) + item["response"]
+            groups = {}
+            for item in findings[kind]:
+                if item.get("previous_id"):
+                    groups.setdefault(item["previous_id"], []).append(item)
+            for pid, items in groups.items():
+                if len(items) < 2:
+                    continue
+                if pid not in old:
+                    raise ValueError("Неизвестная исходная задача при объединении")
+                value = worker.ask(
+                    "compose",
+                    f"""Несколько строк описывают продолжение одного пункта прошлого отчёта.
+Объедини их в одну краткую строку {kind}, другой список оставь пустым.
+Сохрани все существенные результаты и незакрытые вопросы; частичное возобновление
+не означает завершение всей задачи. Противоречия явно обозначь, не выбирай удобную версию.
+Не добавляй факты. Сохрани подтверждающие evidence_ids и относящиеся attachment_ids.
+Используй previous_id исходного пункта и его направление section, если это задача.
+Не более трёх ёмких предложений в результате; статус должен относиться ко всему предмету.""",
+                    {"period": period, "previous": old[pid], "candidates": items},
+                    Findings.model_json_schema(),
+                )
+                merged = value.get(kind, [])
+                if len(merged) != 1:
+                    raise ValueError("Не удалось объединить продолжение задачи")
+                merged = merged[0]
+                merged["previous_id"] = pid
+                merged["id"] = pid
+                if kind == "tasks":
+                    merged["section"] = old[pid]["section"]
+                if not set(merged["evidence_ids"]).issubset(
+                    {sid for x in items for sid in x["evidence_ids"]}
+                ):
+                    raise ValueError("Объединение добавило неподтверждённый источник")
+                if not set(merged["attachment_ids"]).issubset(
+                    {aid for x in items for aid in x["attachment_ids"]}
+                ):
+                    raise ValueError("Объединение добавило неподтверждённое вложение")
+                first = next(
+                    i
+                    for i, x in enumerate(findings[kind])
+                    if x.get("previous_id") == pid
+                )
+                findings[kind] = [
+                    x for x in findings[kind] if x.get("previous_id") != pid
+                ]
+                findings[kind].insert(first, merged)
+                findings["warnings"].extend(value.get("warnings", []))
+        return findings
 
     def compact_facts(self, cards, worker, period):
         """Bound synthesis context while retaining explicit evidence and uncertainty."""
@@ -520,11 +620,15 @@ attachment_ids выбирай из источников; включай толь
                 )
                 assembled["risks"] = result["risks"]
                 assembled["warnings"].extend(result["warnings"])
+                assembled = self.merge_continuations(
+                    assembled, previous, worker, report["period"]
+                )
                 for kind in ("tasks", "risks"):
                     for index, item in enumerate(assembled[kind]):
                         item["id"] = (
                             item["previous_id"] or f"{rid[:8]}-{kind[0]}{index + 1}"
                         )
+                assembled = bind_attachment_sources(assembled, relevant)
                 findings = validate_findings(assembled, relevant, previous)
                 warnings = findings.pop("warnings")
                 warnings += [

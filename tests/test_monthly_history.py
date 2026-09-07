@@ -462,3 +462,71 @@ def test_large_fact_compaction_rejects_unknown_evidence(tmp_path):
     ] * 3
     with pytest.raises(ValueError, match="неподтверждённые"):
         MonthlyService(tmp_path).compact_facts(cards, Worker(), "2026-08")
+
+
+def test_attachment_citation_adds_only_known_owner():
+    from src.reporting.pipeline import bind_attachment_sources
+
+    item = dict(task(), evidence_ids=["m1"], attachment_ids=["a2"])
+    value = {"tasks": [item], "risks": []}
+    bind_attachment_sources(
+        value,
+        [{"id": "m1", "attachments": []}, {"id": "m2", "attachments": [{"id": "a2"}]}],
+    )
+    assert item["evidence_ids"] == ["m1", "m2"]
+    item["evidence_ids"] = ["a2"]
+    bind_attachment_sources(value, [{"id": "m2", "attachments": [{"id": "a2"}]}])
+    assert item["evidence_ids"] == ["m2"]
+    item["attachment_ids"] = ["invented"]
+    with pytest.raises(ValueError, match="несуществующее"):
+        bind_attachment_sources(value, [])
+
+
+def test_risks_keep_number_identity_and_original_rank(tmp_path):
+    service = MonthlyService(tmp_path)
+    old = {
+        "id": "r1",
+        "number": "2.17",
+        "response": "Ранг риска: значительный. Уточнить ТЗ.",
+    }
+    new = {
+        "id": "new",
+        "number": "2.17",
+        "previous_id": None,
+        "response": "Согласовать ТЗ.",
+    }
+    result = service.merge_continuations(
+        {"tasks": [], "risks": [new], "warnings": []},
+        {"tasks": [], "risks": [old]},
+        object(),
+        "2026-08",
+    )
+    assert result["risks"][0]["previous_id"] == "r1"
+    assert result["risks"][0]["response"].startswith("Ранг риска: значительный.")
+
+
+def test_duplicate_continuations_merge_in_original_section(tmp_path):
+    old = task()
+    first = dict(task(), id="new1", previous_id="t1", evidence_ids=["m1"])
+    second = dict(
+        task(), id="new2", section="4.5", previous_id="t1", evidence_ids=["m2"]
+    )
+
+    class Worker:
+        def ask(self, *args):
+            return {
+                "tasks": [dict(first, section="4.5", evidence_ids=["m1", "m2"])],
+                "risks": [],
+                "warnings": [],
+            }
+
+    result = MonthlyService(tmp_path).merge_continuations(
+        {"tasks": [first, second], "risks": [], "warnings": []},
+        {"tasks": [old], "risks": []},
+        Worker(),
+        "2026-08",
+    )
+    assert len(result["tasks"]) == 1
+    assert result["tasks"][0]["id"] == "t1"
+    assert result["tasks"][0]["section"] == "4.2"
+    assert result["tasks"][0]["evidence_ids"] == ["m1", "m2"]
