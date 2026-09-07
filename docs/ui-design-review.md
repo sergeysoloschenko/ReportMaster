@@ -8,4 +8,4 @@ An independent review agent evaluated actual desktop (1025 × 929), mobile (390 
 
 Verified locally: production build, automatic August draft selection, search, 18 historical task rows, eight procurement rows, risk view, source opening and Escape dismissal, diagnostic details without replacing the report. No generation or approval was triggered. Remaining optional improvement: identify source buttons with sender/date instead of sequential numbers.
 
-The revised UI is local pending user review; the previous UI remains on Hostinger.
+The user authorized deployment of the reviewed UI on 2026-09-07. Deployment instructions and server details are in project-guide.md.

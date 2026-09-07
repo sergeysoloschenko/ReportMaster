@@ -179,3 +179,7 @@ The web UI asks for `APP_PASSWORD` before uploads, job status, reports, or attac
 - Thread splitting improved by participant overlap + time gap
 - Config loading no longer overwrites YAML sections blindly
 - Added real pytest tests for core logic (`tests/test_core_logic.py`)
+
+## Актуальное руководство
+
+Архитектура, доступ к Hostinger, история отчётов и порядок деплоя: [docs/project-guide.md](docs/project-guide.md).
